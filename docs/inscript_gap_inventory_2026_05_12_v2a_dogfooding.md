@@ -7,6 +7,7 @@
 **Author:** Rob Thomas / R. Michael Thomas
 **Document type:** Gap inventory — scoped to v2a (Dogfooding Resolutions, May 12, 2026). Five focused programs run against the Möbius Paradigm per-document corpus (30 records, 462,640 words total). Each gap is categorized as **v2-patch** (fixable without spec change), **v2-design** (requires new vocabulary or semantics), or **UX** (interpreter output quality). Two gaps from the v1 dogfooding are confirmed *resolved* at scale.
 **Relationship to prior documents:** Extends the v1 dogfooding inventory (`inscript_gap_inventory_2026_05_12_v1_dogfooding.md`, same date) and verifies the resolutions locked in `inscript_addendum_v2a_dogfooding_resolutions.md` (same date). Operates within the locked specification (inception checkpoint v1 + addenda v1a/v1b/v1c/v1d/v2a). Does not modify any locked decision.
+**Downstream document:** The six gaps below (D9, D10, D11, U7, U8, U9) have been triaged in `inscript_v2b_design_triage_2026_05_12.md` — re-tiering U7/U8 as v2.1-patches, demoting D10 to a model clarification + error improvement, and grouping D9 (composition return values) + D11 (generalize `of`) into a single proposed v2b addendum about value flow.
 
 ---
 
