@@ -393,6 +393,149 @@ def parse(
 
 
 # ---------------------------------------------------------------------------
+# v3a §108–§110: `when` block parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_when_block(
+    header_tokens: list[Token],
+    action_token_lists: list[list[Token]],
+    composition_names: set[str] | None = None,
+) -> ASTNode | InscriptResult:
+    """Parse a `when <cond> [unless <guard>] [:]` header plus its
+    indented action block (v3a §108/§109/§110).
+
+    `header_tokens` is the reordered token sequence for the `when` line
+    (must begin with the `when` connective). `action_token_lists` is one
+    reordered token list per indented action line; blank lines have been
+    elided by the caller (v1c §48 / v3a §110). Indentation has already
+    been validated at the CLI boundary — `parse_when_block` itself does
+    not see leading whitespace.
+
+    Returns:
+        - WhenNode on success.
+        - InscriptResult AMBER_PRECEDENCE if any condition or action
+          sub-statement contains mixed `and`/`or` (v3a §123).
+        - InscriptResult ERROR_PARSE on grammar errors.
+    """
+    if not header_tokens:
+        return InscriptResult(
+            status=ResultStatus.ERROR_PARSE,
+            message="There's nothing to parse here.",
+            executed=False,
+        )
+
+    if not (
+        header_tokens[0].type is TokenType.CONNECTIVE
+        and header_tokens[0].value == "when"
+    ):
+        return InscriptResult(
+            status=ResultStatus.ERROR_PARSE,
+            message=(
+                f"I expected a 'when' statement here, not "
+                f"'{header_tokens[0].value}'."
+            ),
+            executed=False,
+        )
+
+    # v3a §110: an empty action block is a parse error. The header alone
+    # has no executable body.
+    if not action_token_lists:
+        return InscriptResult(
+            status=ResultStatus.ERROR_PARSE,
+            message=(
+                "'when' needs an indented action block — at least one "
+                "line after the 'when' line, indented by at least one "
+                "space (v3a §110)."
+            ),
+            executed=False,
+        )
+
+    comp = composition_names or set()
+
+    # Parse the header — condition + optional unless guard + optional `:`.
+    stream = TokenStream(header_tokens[1:])  # skip the `when` connective
+    try:
+        if stream.at_end():
+            raise _ParseError(
+                "I expected a condition after 'when'. "
+                "Try: when <name> is above <value>."
+            )
+        condition = _parse_or_condition(stream)
+
+        unless_guard: ASTNode | None = None
+        peek = stream.peek()
+        if (
+            peek
+            and peek.type is TokenType.CONNECTIVE
+            and peek.value == "unless"
+        ):
+            stream.consume()  # eat `unless`
+            if stream.at_end():
+                raise _ParseError(
+                    "I expected a guard condition after 'unless'."
+                )
+            unless_guard = _parse_or_condition(stream)
+
+        # v3a §110: the colon after the `when` line is optional.
+        peek = stream.peek()
+        if peek and peek.type is TokenType.DELIMITER and peek.value == ":":
+            stream.consume()
+
+        if not stream.at_end():
+            unexpected = stream.peek()
+            raise _ParseError(
+                f"I didn't expect '{unexpected.value}' in the 'when' header."
+            )
+    except _ParseError as e:
+        return InscriptResult(
+            status=ResultStatus.ERROR_PARSE,
+            message=e.message,
+            executed=False,
+        )
+
+    # Parse each action line through the regular `parse()` path so all
+    # existing grammar (compositions, choose, each, etc.) applies. Inside
+    # `_parse_one_operation`, `when` / `unless` are rejected with v3a
+    # error wording; `finish` is parsed as a regular verb.
+    action_asts: list[ASTNode] = []
+    for tokens in action_token_lists:
+        sub = parse(tokens, composition_names=comp)
+        if isinstance(sub, InscriptResult):
+            # Propagate parse / amber outcomes directly. Amber from an
+            # action statement still blocks Phase 2 per v3a §107.
+            return sub
+        action_asts.append(sub)
+
+    action: ASTNode = (
+        action_asts[0] if len(action_asts) == 1
+        else SequenceNode(operations=action_asts)
+    )
+
+    when_node = WhenNode(condition=condition, unless=unless_guard, action=action)
+
+    # v3a §123: condition or guard mixed and/or — amber. Action sub-
+    # statements were already amber-checked individually by `parse()`,
+    # which would have short-circuited above. The check here is for the
+    # header's two condition ASTs.
+    if _contains_mixed_precedence(when_node):
+        from .renderer import render, render_with_explicit_precedence
+        return InscriptResult(
+            status=ResultStatus.AMBER_PRECEDENCE,
+            canonical=render(when_node),
+            message=(
+                f"I'll read this as: "
+                f"{render_with_explicit_precedence(when_node)}. "
+                "Is that what you mean? If not, split it into two statements."
+            ),
+            executed=False,
+            pending_ast=when_node,
+        )
+
+    return when_node
+
+
+# ---------------------------------------------------------------------------
 # Operation sequencing (`and` between complete verb phrases, §21 rule 3)
 # ---------------------------------------------------------------------------
 
@@ -438,6 +581,22 @@ def _parse_one_operation(stream: TokenStream, comp: set[str]) -> ASTNode:
             "like 'remember', 'show', 'filter', 'count', 'gather', "
             "'combine', 'each', or 'choose'."
         )
+    # v3a §108: `when` is a top-level statement only. Any `when` reaching
+    # this code path is inside a composition body, an `each` body, or a
+    # `when` action block — all forbidden.
+    if t.type is TokenType.CONNECTIVE and t.value == "when":
+        raise _ParseError(
+            "'when' is a top-level statement and starts its own indented "
+            "action block. It can't appear inside compositions, 'each' "
+            "bodies, or another 'when' action block."
+        )
+    # v3a §109: `unless` is a guard clause on `when`, never standalone.
+    if t.type is TokenType.CONNECTIVE and t.value == "unless":
+        raise _ParseError(
+            "'unless' is a guard clause that follows a 'when' condition — "
+            "it can't introduce a statement on its own. "
+            "Try: when <condition> unless <guard>."
+        )
     raise _ParseError(f"I didn't expect '{t.value}' at the start of an operation.")
 
 
@@ -470,6 +629,12 @@ def _parse_verb_statement(stream: TokenStream, comp: set[str]) -> ASTNode:
                 "differently, use 'keep' to separate them by condition."
             )
         return _parse_choose(stream, comp)
+    if verb.value == "finish":
+        # v3a §112 — slot-less verb. Phase 1 semantic check (in the
+        # analyzer) rejects calls outside an action-block context; here
+        # we just parse the leaf node. `finish` may legitimately appear
+        # in composition bodies (analyzer defers the error to call time).
+        return FinishNode()
     raise _ParseError(f"Unknown verb '{verb.value}'.")
 
 
@@ -1390,6 +1555,18 @@ def _contains_mixed_precedence(node: ASTNode) -> bool:
                 return True
             if _contains_mixed_precedence(br.action):
                 return True
+    if isinstance(node, WhenNode):
+        # v3a §123: mixed and/or in `when` or `unless` conditions triggers
+        # amber at registration time. Action statements may themselves
+        # contain where/choose conditions, so recurse into them too — an
+        # unresolved amber anywhere in a handler still blocks Phase 2 per
+        # v3a §107.
+        if _condition_is_mixed(node.condition):
+            return True
+        if node.unless is not None and _condition_is_mixed(node.unless):
+            return True
+        if _contains_mixed_precedence(node.action):
+            return True
     return False
 
 
