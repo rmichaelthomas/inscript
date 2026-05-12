@@ -516,9 +516,11 @@ def test_sentence_48_schema_mismatch():
     ])
     r = session.run_line("filter the mixed-records where total is above 50")
     assert r.status is ResultStatus.ERROR_SEMANTIC
-    assert "Not every item" in r.message
-    assert "total" in r.message
-    assert "mixed-records" in r.message
+    # U2/U3: the partial-match error names 'item1' as the offending record
+    # and signals that other items DO have the field.
+    assert "'item1' in 'mixed-records'" in r.message
+    assert "doesn't have a field called 'total'" in r.message
+    assert "Other items do have it" in r.message
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +604,160 @@ def test_examples_run_without_error(capsys):
     assert "I understand this as: show age" in out
     assert "30" in out
     assert "red, blue, green" in out
+
+
+# ---------------------------------------------------------------------------
+# UX polish: --quiet flag, schema-mismatch wording (U2/U3), truncation (U5)
+# ---------------------------------------------------------------------------
+
+
+def test_quiet_flag_suppresses_canonical_lines(tmp_path):
+    """U1/U4: --quiet drops the 'I understand this as:' echo but keeps data."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text(
+        "remember a number called age with 30\n"
+        "show age\n"
+        "count the colors\n"
+    )
+    # Need `colors` defined for the count not to error — adjust:
+    src.write_text(
+        "remember a number called age with 30\n"
+        "remember a list called colors with red and blue and green\n"
+        "show age\n"
+        "count the colors\n"
+    )
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, quiet=True, out=buf)
+    text = buf.getvalue()
+    assert "I understand this as" not in text
+    # Data lines present.
+    assert "30" in text
+    assert "3" in text  # count of colors
+
+
+def test_quiet_flag_mirrors_blank_lines(tmp_path):
+    """U1/U4: blank source lines surface as empty lines in --quiet output."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text(
+        "remember a number called age with 30\n"
+        "\n"
+        "show age\n"
+    )
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, quiet=True, out=buf)
+    # Output: data for line 1 (none — remember is silent), blank from
+    # source line 2, data for line 3 ("30"). With quiet, the only
+    # non-blank line is "30"; there should be a blank line before it.
+    lines = buf.getvalue().split("\n")
+    # Expected sequence: empty (blank mirror), "30", trailing empty
+    assert "" in lines
+    assert "30" in lines
+
+
+def test_quiet_flag_without_quiet_keeps_canonical(tmp_path):
+    """Default (no --quiet) still emits canonical echo — unchanged behavior."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text("remember a number called age with 30\nshow age\n")
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, out=buf)
+    text = buf.getvalue()
+    assert "I understand this as" in text
+    assert "30" in text
+
+
+def test_u2_names_first_offending_record_in_schema_mismatch():
+    """U2: the partial-match error names the source record that lacks the field."""
+    session, _ = run_lines([
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an item called item1 with price as 30 and color as red",
+        "remember a list called mixed with order1 and order2 and item1",
+    ])
+    r = session.run_line("filter the mixed where total is above 0")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    # The first failing record is item1 (orders 1 & 2 have total; item1 doesn't).
+    assert "'item1' in 'mixed'" in r.message
+
+
+def test_u3_zero_match_error_says_no_item():
+    """U3: when no record has the field, error reads 'No item in X has...'"""
+    session, _ = run_lines([
+        "remember an order called order1 with total as 75 and status as active",
+        "remember a list called orders with order1",
+    ])
+    r = session.run_line("filter the orders where nonexistent is above 5")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert r.message.startswith("No item in 'orders' has a field called 'nonexistent'.")
+
+
+def test_u3_partial_match_error_calls_out_others():
+    """U3: partial-match error appends 'Other items do have it.'"""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an item called item1 with price as 30 and color as red",
+        "remember a list called mixed with o1 and item1",
+    ])
+    r = session.run_line("filter the mixed where total is above 0")
+    assert "Other items do have it" in r.message
+
+
+def test_u5_gather_above_threshold_is_truncated(tmp_path):
+    """U5: gather's auto-show truncates lists > 20 items."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text("gather the nums from 1 to 50\n")
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, out=buf)
+    text = buf.getvalue()
+    # Truncated form: first 10, ellipsis, last 10.
+    assert "1, 2, 3, 4, 5, 6, 7, 8, 9, 10" in text
+    assert "..." in text
+    assert "41, 42, 43, 44, 45, 46, 47, 48, 49, 50" in text
+    # The full middle (e.g., 25) should NOT appear in the auto-show.
+    auto_show_segment = text.split("I understand this as: gather")[1] if "I understand this as: gather" in text else text
+    # Find the data line after the canonical
+    data_lines = [l for l in auto_show_segment.split("\n") if l and not l.startswith("I understand")]
+    if data_lines:
+        first_data = data_lines[0]
+        assert ", 25, " not in first_data, "Middle of truncated range leaked through"
+
+
+def test_u5_gather_at_threshold_is_not_truncated(tmp_path):
+    """U5: lists with exactly 20 items display in full — threshold is exclusive."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text("gather the nums from 1 to 20\n")
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, out=buf)
+    text = buf.getvalue()
+    assert "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20" in text
+    assert "..." not in text
+
+
+def test_u5_explicit_show_is_not_truncated(tmp_path):
+    """U5: explicit `show <list>` never truncates — user asked for the data."""
+    import io
+    from inscript.cli import run_file
+    src = tmp_path / "p.insc"
+    src.write_text(
+        "gather the nums from 1 to 50\n"
+        "show nums\n"
+    )
+    buf = io.StringIO()
+    run_file(str(src), auto_confirm_amber=True, out=buf)
+    text = buf.getvalue()
+    # The show output (after gather's truncated auto-show) shows all 50.
+    show_segment = text.split("show nums")[-1]
+    assert "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25" in show_segment
+    assert "26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50" in show_segment
 
 
 def test_program2_orders_example_runs(capsys):

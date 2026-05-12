@@ -617,8 +617,10 @@ def test_sentence_48_schema_mismatch_in_list_of_records():
     run("remember a list called mixed-records with order1 and item1", symtab)
     r = run("filter the mixed-records where total is above 50", symtab)
     assert r.status is ResultStatus.ERROR_SEMANTIC
-    assert "Not every item" in r.message
-    assert "total" in r.message
+    # U2/U3: error names 'item1' as the offender (partial-match case).
+    assert "'item1' in 'mixed-records'" in r.message
+    assert "doesn't have a field called 'total'" in r.message
+    assert "Other items do have it" in r.message
 
 
 # ---------------------------------------------------------------------------

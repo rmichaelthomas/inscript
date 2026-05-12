@@ -10,6 +10,9 @@ Usage:
     python -m inscript <file.insc>      # Execute a file
     python -m inscript --test <file>    # Test mode (auto-confirm amber)
     python -m inscript <file> --test    # --test may appear in any position
+    python -m inscript <file> --quiet   # Suppress "I understand this as: ..."
+                                        # echo; mirror blank source lines so
+                                        # visual grouping survives. U1/U4.
 """
 
 from __future__ import annotations
@@ -57,25 +60,78 @@ class Session:
 # ---------------------------------------------------------------------------
 
 
+_TRUNCATION_THRESHOLD = 20  # U5: lists longer than this are truncated on auto-show.
+
+
+def _is_auto_shown(canonical: str | None) -> bool:
+    """U5: only auto-show outputs are subject to truncation.
+
+    Explicit `show <name>` and `each ... show <field>` are user-requested
+    displays — truncating them would violate intent. The auto-show
+    sources that can produce >20-item output are `gather` and `keep`.
+    `count` and `combine` produce single-value output that can't exceed
+    the threshold; checking them is harmless but unnecessary.
+    """
+    if not canonical:
+        return False
+    return canonical.startswith("gather ") or canonical.startswith("keep ")
+
+
+def _maybe_truncate(lines: list[str]) -> list[str]:
+    """U5: condense large auto-show output.
+
+    Two display shapes are produced by the interpreter (v1b §42):
+    - Single line of comma-separated items (numeric or string list).
+    - Multiple lines, one record per line (list of records).
+
+    For either shape exceeding 20 items, keep the first 10 and the last
+    10 with an ellipsis between them. Truncation is display-only — the
+    symbol table holds the full list.
+    """
+    if not lines:
+        return lines
+    if len(lines) > _TRUNCATION_THRESHOLD:
+        return lines[:10] + ["..."] + lines[-10:]
+    if len(lines) == 1 and ", " in lines[0]:
+        parts = lines[0].split(", ")
+        if len(parts) > _TRUNCATION_THRESHOLD:
+            head = ", ".join(parts[:10])
+            tail = ", ".join(parts[-10:])
+            return [f"{head}, ..., {tail}"]
+    return lines
+
+
 def display_result(
     result: InscriptResult | None,
     session: Session,
     *,
     auto_confirm_amber: bool = False,
+    quiet: bool = False,
     out=None,
     _suppress_canonical: bool = False,
 ) -> None:
-    """Render an InscriptResult to stdout per v1c §50 + v1a §33."""
+    """Render an InscriptResult to stdout per v1c §50 + v1a §33.
+
+    When `quiet` is True (U1/U4), the "I understand this as: ..." echo
+    is suppressed. Data output, error messages, and amber prompts still
+    render. The interpreter's structured result is unchanged — quiet
+    only affects what reaches stdout.
+    """
     if result is None:
         return
     write = (out.write if out is not None else lambda s: print(s, end=""))
 
-    if result.canonical and not _suppress_canonical:
+    if result.canonical and not _suppress_canonical and not quiet:
         write(f"I understand this as: {result.canonical}\n")
 
     if result.status is ResultStatus.SUCCESS:
         if result.output:
-            for line in result.output:
+            lines = (
+                _maybe_truncate(result.output)
+                if _is_auto_shown(result.canonical)
+                else result.output
+            )
+            for line in lines:
                 write(f"{line}\n")
         return
 
@@ -97,6 +153,7 @@ def display_result(
                 new_result,
                 session,
                 auto_confirm_amber=auto_confirm_amber,
+                quiet=quiet,
                 out=out,
                 _suppress_canonical=True,
             )
@@ -123,12 +180,30 @@ def _prompt(message: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_file(path: str, *, auto_confirm_amber: bool = False) -> None:
+def run_file(
+    path: str,
+    *,
+    auto_confirm_amber: bool = False,
+    quiet: bool = False,
+    out=None,
+) -> None:
     session = Session()
     content = Path(path).read_text(encoding="utf-8")
+    write = (out.write if out is not None else lambda s: print(s, end=""))
     for line in content.splitlines():
+        # v1c §48: blank lines are still skipped by the lexer (semantics
+        # unchanged). When --quiet is active, mirror them in the display
+        # stream so the user's paragraph breaks survive (U1/U4).
+        if quiet and not line.strip():
+            write("\n")
+            continue
         result = session.run_line(line)
-        display_result(result, session, auto_confirm_amber=auto_confirm_amber)
+        display_result(
+            result, session,
+            auto_confirm_amber=auto_confirm_amber,
+            quiet=quiet,
+            out=out,
+        )
 
 
 def repl() -> None:
@@ -149,19 +224,22 @@ def repl() -> None:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     auto = False
-    # Accept --test in any position. Unknown flags (starting with --) are
+    quiet = False
+    # Accept --test and --quiet in any position. Unknown flags are
     # rejected so typos don't silently change behavior.
     positional: list[str] = []
     for a in args:
         if a == "--test":
             auto = True
+        elif a == "--quiet":
+            quiet = True
         elif a.startswith("--"):
             print(f"Error: unknown flag '{a}'", file=sys.stderr)
             return 2
         else:
             positional.append(a)
     if positional:
-        run_file(positional[0], auto_confirm_amber=auto)
+        run_file(positional[0], auto_confirm_amber=auto, quiet=quiet)
     else:
         repl()
     return 0

@@ -319,8 +319,11 @@ def test_filter_on_mixed_schemas_field_not_in_all_records():
     result = _analyze("filter the mixed-records where total is above 50", symtab)
     assert isinstance(result, InscriptResult)
     assert result.status is ResultStatus.ERROR_SEMANTIC
-    assert "Not every item" in result.message
-    assert "total" in result.message
+    # U2/U3: the offending record is named (the test fixture builds the
+    # list with raw dicts rather than a `remember` chain, so the analyzer
+    # falls back to a positional identifier — "Item 2" here).
+    assert "doesn't have a field called 'total'" in result.message
+    assert "Other items do have it" in result.message
     assert "mixed-records" in result.message
 
 

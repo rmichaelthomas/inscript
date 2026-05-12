@@ -64,6 +64,14 @@ class SymbolEntry:
     value: Any
     type: str   # see _TYPE_NAMES below
     schema: dict[str, str] | None = None  # records only
+    # For list_of_records: the source-record names captured at list
+    # construction. Populated when the list was built via
+    # `remember a list with X and Y and Z` where each item was a name
+    # reference to a record. Used by U2/U3 to name the offending record
+    # in schema-mismatch errors. None if the list was built another way
+    # (literal values, captured from `keep`/`filter`); the analyzer falls
+    # back to a positional identifier in that case.
+    source_names: list[str | None] | None = None
 
 
 # Recognized type strings.
@@ -311,16 +319,22 @@ def _check_show(
                 continue
             if in_any:
                 raise _SemanticError(
-                    f"Not every item in '{iterator.collection_name}' "
-                    f"has a field called '{fname}'."
+                    _schema_mismatch_message(
+                        symtab[iterator.collection_name],
+                        iterator.record_schemas,
+                        fname,
+                    )
                 )
             # If we're iterating records and the name matches nothing,
             # fall through to symbol-table lookup only for the *first*
             # field (target) — extras are only legal as record fields.
             if fname != name:
                 raise _SemanticError(
-                    f"Not every item in '{iterator.collection_name}' "
-                    f"has a field called '{fname}'."
+                    _schema_mismatch_message(
+                        symtab[iterator.collection_name],
+                        iterator.record_schemas,
+                        fname,
+                    )
                 )
         if all(name in s for s in iterator.record_schemas):
             return
@@ -401,6 +415,37 @@ def _require_numeric(t: str, label: str, op: str) -> None:
     )
 
 
+def _schema_mismatch_message(
+    entry: SymbolEntry,
+    schemas: list[dict[str, str]],
+    field_name: str,
+) -> str:
+    """Build the schema-homogeneity error for a list of records.
+
+    U2: name the first offending record (by source name when known,
+    else by position). U3: distinguish the zero-match case ("No item
+    has it") from the partial case ("'X' doesn't have it; others do").
+    """
+    in_any = any(field_name in s for s in schemas)
+    if not in_any:
+        return f"No item in '{entry.name}' has a field called '{field_name}'."
+    missing_idx = next(
+        i for i, s in enumerate(schemas) if field_name not in s
+    )
+    if entry.source_names and missing_idx < len(entry.source_names):
+        src = entry.source_names[missing_idx]
+        if src:
+            offender = f"'{src}' in '{entry.name}'"
+        else:
+            offender = f"Item {missing_idx + 1} in '{entry.name}'"
+    else:
+        offender = f"Item {missing_idx + 1} in '{entry.name}'"
+    return (
+        f"{offender} doesn't have a field called '{field_name}'. "
+        f"Other items do have it."
+    )
+
+
 def _resolve_field(
     field_node: ASTNode,
     symtab: dict[str, SymbolEntry],
@@ -414,14 +459,16 @@ def _resolve_field(
         name = field_node.name
         if iterator.record_schemas is not None:
             in_all = all(name in s for s in iterator.record_schemas)
-            in_any = any(name in s for s in iterator.record_schemas)
             if in_all:
                 # Determine the common type of this field.
                 types = {s[name] for s in iterator.record_schemas}
                 return (next(iter(types)) if len(types) == 1 else "mixed"), name
             raise _SemanticError(
-                f"Not every item in '{iterator.collection_name}' "
-                f"has a field called '{name}'."
+                _schema_mismatch_message(
+                    symtab[iterator.collection_name],
+                    iterator.record_schemas,
+                    name,
+                )
             )
         # Scalar list — fields don't exist; user must use `each`.
         raise _SemanticError(

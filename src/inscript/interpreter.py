@@ -262,7 +262,24 @@ def _exec_remember_list(
         copy.deepcopy(_evaluate_expression(it, symtab, current_item))
         for it in node.items
     ]
-    _store(symtab, node.name, items)
+    # U2: capture the source-record names for each item so a later
+    # schema-mismatch error can name the offending record. Only items
+    # that referenced a named record in the symbol table get a name;
+    # literal-value items or string-values stay None.
+    source_names: list[str | None] = []
+    has_named = False
+    for it in node.items:
+        if isinstance(it, BareWord) and it.word in symtab and symtab[it.word].type == "record":
+            source_names.append(it.word)
+            has_named = True
+        else:
+            source_names.append(None)
+    _store(
+        symtab,
+        node.name,
+        items,
+        source_names=source_names if has_named else None,
+    )
     return []
 
 
@@ -549,14 +566,25 @@ def _apply_op(op: str, a: Any, b: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _store(symtab: dict[str, SymbolEntry], name: str, value: Any) -> None:
+def _store(
+    symtab: dict[str, SymbolEntry],
+    name: str,
+    value: Any,
+    *,
+    source_names: list[str | None] | None = None,
+) -> None:
     """Store value under name. Existing entries are overwritten (v1d §58).
     Copy-on-store enforces v1's copy semantics (§24 line 486).
+
+    `source_names` (U2) carries the names of the records the list was
+    built from, when applicable, so schema-mismatch errors can name the
+    offender. None for all non-list-of-records cases.
     """
     value = copy.deepcopy(value)
     type_, schema = _infer_type_and_schema(value)
     symtab[name] = SymbolEntry(
         name=name, value=value, type=type_, schema=schema,
+        source_names=source_names,
     )
 
 
