@@ -119,6 +119,17 @@ class RememberCompositionNode(ASTNode):
 
 
 @dataclass
+class FieldAccessNode(ASTNode):
+    """v2b §77 — `<field> of <record>` as a value expression at any value
+    position (after `with`, after `as`, after operators in `where`).
+    Single-level only; chained `of` (a of b of c) is a parse error.
+    Existing v2a §68 `show <field> of <record>` is still represented on
+    ShowNode (a special case of the general rule)."""
+    field: str
+    record_name: str
+
+
+@dataclass
 class ShowNode(ASTNode):
     target: ASTNode | None  # None = display the current iterator item
     # v2a §68 (D4) — `of` field access: when present, `target` is the
@@ -588,6 +599,11 @@ def _parse_remember_from(
                 descriptor=descriptor,
             )
         stream.consume()
+        # v2b §77: `from <field> of <record>` — field-access value.
+        after = stream.peek()
+        if after and after.type is TokenType.CONNECTIVE and after.value == "of":
+            access = _maybe_field_access(stream, peek.value)
+            return RememberValueNode(name=name, value=access, descriptor=descriptor)
         return RememberValueNode(
             name=name, value=NameRef(name=peek.value), descriptor=descriptor,
         )
@@ -638,6 +654,15 @@ def _parse_show(stream: TokenStream, *, in_each: bool = False) -> ShowNode:
                 raise _ParseError(
                     f"I expected a record name after 'of', not "
                     f"'{rec_tok.value}'."
+                )
+            # v2b §77 sub-decision I: chained `of` is a parse error
+            # (no nested records in v2b).
+            chain = stream.peek()
+            if chain and chain.type is TokenType.CONNECTIVE and chain.value == "of":
+                raise _ParseError(
+                    "Field access uses one record at a time: "
+                    "<field> of <record>. Chained forms (a of b of c) "
+                    "need nested records, which v2b doesn't yet have."
                 )
             return ShowNode(
                 target=NameRef(name=peek.value),
@@ -900,7 +925,8 @@ def _parse_simple_condition(stream: TokenStream) -> ConditionNode:
 
 
 def _parse_value(stream: TokenStream) -> ASTNode:
-    """Consume a single value token (NUMBER or UNKNOWN).
+    """Consume a single value token (NUMBER or UNKNOWN), optionally
+    extended by `of <record>` for field access (v2b §77).
 
     Vocabulary words in value position are rejected per v1c §46.
     """
@@ -910,7 +936,8 @@ def _parse_value(stream: TokenStream) -> ASTNode:
     if tok.type is TokenType.NUMBER:
         return NumberLiteral(value=_parse_number(tok.value))
     if tok.type is TokenType.UNKNOWN:
-        return BareWord(word=tok.value)
+        # v2b §77: `<field> of <record>` field-access value expression.
+        return _maybe_field_access(stream, tok.value)
     cat = reserved_category(tok.value)
     if cat:
         raise _ParseError(
@@ -918,6 +945,40 @@ def _parse_value(stream: TokenStream) -> ASTNode:
             f"used as a value. Try a different word."
         )
     raise _ParseError(f"I didn't expect '{tok.value}' as a value.")
+
+
+def _maybe_field_access(stream: TokenStream, first_unknown: str) -> ASTNode:
+    """v2b §77 — if the next token is the connective `of`, consume the
+    field-access tail and return FieldAccessNode. Otherwise return a
+    BareWord with the already-consumed UNKNOWN. Single-level only:
+    a second `of` after the record name is a parse error.
+    """
+    after = stream.peek()
+    if not (after and after.type is TokenType.CONNECTIVE and after.value == "of"):
+        return BareWord(word=first_unknown)
+    stream.consume()  # eat `of`
+    rec_tok = stream.consume()
+    if rec_tok is None:
+        raise _ParseError("I expected a record name after 'of'.")
+    if rec_tok.type is not TokenType.UNKNOWN:
+        rcat = reserved_category(rec_tok.value)
+        if rcat:
+            raise _ParseError(
+                f"The word '{rec_tok.value}' is reserved in "
+                f"Inscript — it's used as a {rcat} and can't be "
+                f"used as a record name."
+            )
+        raise _ParseError(
+            f"I expected a record name after 'of', not '{rec_tok.value}'."
+        )
+    chain = stream.peek()
+    if chain and chain.type is TokenType.CONNECTIVE and chain.value == "of":
+        raise _ParseError(
+            "Field access uses one record at a time: <field> of <record>. "
+            "Chained forms (a of b of c) need nested records, which v2b "
+            "doesn't yet have."
+        )
+    return FieldAccessNode(field=first_unknown, record_name=rec_tok.value)
 
 
 def _parse_number(s: str) -> int | float:

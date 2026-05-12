@@ -40,6 +40,7 @@ from .parser import (
     CountNode,
     EachNode,
     EachPronoun,
+    FieldAccessNode,
     FilterNode,
     GatherNode,
     KeepNode,
@@ -467,6 +468,10 @@ def _evaluate_expression(
         )
     if isinstance(expr, EachPronoun):
         return current_item
+    if isinstance(expr, FieldAccessNode):
+        # v2b §77: extract <field> of <record> as a value.
+        record = symtab[expr.record_name].value
+        return copy.deepcopy(record[expr.field])
     # Sub-operations that yield a value.
     if isinstance(expr, CombineNode):
         entry = symtab[expr.target.name]
@@ -540,6 +545,11 @@ def _eval_value(value_node: ASTNode, current_item: Any, symtab) -> Any:
         return value_node.word
     if isinstance(value_node, EachPronoun):
         return current_item
+    if isinstance(value_node, FieldAccessNode):
+        # v2b §77: `where ... is <op> <field> of <record>` reads the
+        # field's current value from the named record at compare time.
+        record = symtab[value_node.record_name].value
+        return record[value_node.field]
     raise _RuntimeError(f"Unexpected value {type(value_node).__name__}.")
 
 

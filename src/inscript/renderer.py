@@ -28,6 +28,7 @@ from .parser import (
     CountNode,
     EachNode,
     EachPronoun,
+    FieldAccessNode,
     FilterNode,
     GatherNode,
     KeepNode,
@@ -52,6 +53,9 @@ def render(node: ASTNode) -> str:
         return node.name
     if isinstance(node, EachPronoun):
         return "each"
+    if isinstance(node, FieldAccessNode):
+        # v2b §77: <field> of <record> renders verbatim.
+        return f"{node.field} of {node.record_name}"
 
     if isinstance(node, RememberValueNode):
         # v2a §71 / D6: preserve the user's descriptor verbatim. When the

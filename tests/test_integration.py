@@ -866,3 +866,144 @@ def test_program2_orders_example_runs(capsys):
     # After the filter, two records remain — visible in `show orders`.
     assert "total: 75, status: active" in out
     assert "total: 120, status: pending" in out
+
+
+# ---------------------------------------------------------------------------
+# v2b §83 — Sentences 60–68 (composition returns, generalized `of`)
+# ---------------------------------------------------------------------------
+
+
+def test_sentence_60_composition_return_value_from_keep():
+    """v2b §76 — `remember ... from <composition>` captures the value of
+    the composition's last operation (here `keep` → matching list)."""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 30 and status as active",
+        "remember a list called orders with o1 and o2",
+        "remember how to find-big: keep the orders where total is above 50",
+        "remember the big called big from find-big",
+    ])
+    r6 = session.run_line("count the big")
+    r7 = session.run_line("count the orders")
+    assert r6.status is ResultStatus.SUCCESS and r6.output == ["1"]
+    # D2 / §67: source list unchanged.
+    assert r7.output == ["2"]
+
+
+def test_sentence_61_composition_return_chained_via_intermediate():
+    """v2b §76 — compositions chain via captured intermediates."""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 30 and status as active",
+        "remember an order called o3 with total as 100 and status as pending",
+        "remember a list called orders with o1 and o2 and o3",
+        "remember how to find-big: keep the orders where total is above 50",
+        "remember the big called big from find-big",
+        "remember how to find-active: keep the big where status is active",
+        "remember the result called result from find-active",
+    ])
+    r9 = session.run_line("count the result")
+    assert r9.status is ResultStatus.SUCCESS
+    assert r9.output == ["1"]
+
+
+def test_sentence_62_void_result_composition_errors_at_call_site():
+    """v2b §76 / Q&A G — a composition whose last op is side-effect-only
+    (`show`, `filter`, `each`, `remember`) errors when used in value
+    position. The side effects do NOT execute."""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a list called orders with o1",
+        "remember how to show-totals: each the orders show total",
+    ])
+    r = session.run_line("remember the X called X from show-totals")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "show-totals" in r.message
+    assert "doesn't return a value" in r.message
+    assert "'each'" in r.message
+    # The composition's side effects must not have executed — no display
+    # output should have leaked from the each-show body.
+    assert r.output is None
+    # And `X` must not have been stored.
+    assert "x" not in session.symtab
+
+
+def test_sentence_63_of_in_where_clause():
+    """v2b §77 — `<field> of <record>` as a value after a comparison
+    operator in a `where` clause."""
+    session, _ = run_lines([
+        "remember an order called baseline with total as 100 and status as active",
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 150 and status as pending",
+        "remember a list called orders with o1 and o2",
+    ])
+    r = session.run_line(
+        "keep the orders where total is above total of baseline"
+    )
+    assert r.status is ResultStatus.SUCCESS
+    # auto-shows the one record with total > 100 (o2).
+    assert r.output == ["total: 150, status: pending"]
+    # Source list unchanged (keep is non-destructive).
+    assert len(session.symtab["orders"].value) == 2
+
+
+def test_sentence_64_of_in_with_value_position():
+    """v2b §77 — `<field> of <record>` as a singleton value after `with`."""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a copy called captured-total with total of o1",
+    ])
+    r = session.run_line("show captured-total")
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output == ["75"]
+
+
+def test_sentence_65_chained_of_is_parse_error():
+    """v2b §77 sub-decision I — `a of b of c` is a parse error (no
+    nested records in v2b)."""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+    ])
+    r = session.run_line("show field-a of field-b of o1")
+    assert r.status is ResultStatus.ERROR_PARSE
+    assert "one record at a time" in r.message
+    assert "Chained forms" in r.message
+    assert "nested records" in r.message
+
+
+def test_sentence_66_each_keep_inside_gives_list_level_error():
+    """v2b §78 / D10 — `each ... keep where ...` errors with list-level
+    guidance. (v2.1-patch wording, locked here for spec completeness.)"""
+    session, _ = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a list called orders with o1",
+    ])
+    r = session.run_line("each the orders keep where total is above 50")
+    assert r.status is ResultStatus.ERROR_PARSE
+    assert "'keep' is a list operation" in r.message
+    assert "can't appear inside 'each'" in r.message
+    assert "<list> where <condition>" in r.message
+
+
+def test_sentence_67_duplicate_field_rejected():
+    """v2b §79 / U7 — duplicate field names in multi-field `each show`."""
+    session, _ = run_lines([
+        "remember a doc called d1 with class as checkpoint and words as 1000",
+        "remember a list called docs with d1",
+    ])
+    r = session.run_line("each the docs show class and class")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "'class'" in r.message
+    assert "twice" in r.message
+
+
+def test_sentence_68_of_on_list_suggests_each():
+    """v2b §80 / U8 — `of` on a list-of-records suggests the each form."""
+    session, _ = run_lines([
+        "remember a doc called d1 with class as checkpoint and words as 1000",
+        "remember a list called docs with d1",
+    ])
+    r = session.run_line("show class of docs")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "single record" in r.message
+    assert "each the docs show class" in r.message

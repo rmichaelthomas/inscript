@@ -36,6 +36,7 @@ from .parser import (
     CountNode,
     EachNode,
     EachPronoun,
+    FieldAccessNode,
     FilterNode,
     GatherNode,
     KeepNode,
@@ -214,7 +215,42 @@ def _check_value_expr(
                 f"You might need to 'remember' it first."
             )
         return
+    if isinstance(value_node, FieldAccessNode):
+        _check_field_access(value_node, symtab)
+        return
     _check(value_node, symtab, iterator)
+
+
+def _check_field_access(
+    node: FieldAccessNode, symtab: dict[str, SymbolEntry],
+) -> None:
+    """v2b §77 — three semantic checks for `<field> of <record>` at any
+    value position (same as v2a §68 in `show` target position):
+    1. The record name resolves to a symbol.
+    2. The symbol is a record (with U8 list-of-records guidance).
+    3. The record's schema contains the field.
+    """
+    if node.record_name not in symtab:
+        raise _SemanticError(
+            f"I can't find '{node.record_name}'. "
+            f"You might need to 'remember' it first."
+        )
+    entry = symtab[node.record_name]
+    if entry.type != "record":
+        if entry.type == "list_of_records":
+            raise _SemanticError(
+                f"'of' needs a single record. '{node.record_name}' "
+                f"is a list of records — did you mean: "
+                f"each the {node.record_name} show {node.field}?"
+            )
+        raise _SemanticError(
+            f"'of' needs a record. '{node.record_name}' is "
+            f"{_singular(entry.type)}."
+        )
+    if entry.schema is None or node.field not in entry.schema:
+        raise _SemanticError(
+            f"'{node.record_name}' doesn't have a field called '{node.field}'."
+        )
 
 
 def _check_remember_list(
@@ -256,6 +292,11 @@ def _infer_item_type(item: ASTNode, symtab: dict[str, SymbolEntry]) -> tuple[str
         if item.word in symtab:
             return symtab[item.word].type, item.word
         return "string", item.word
+    if isinstance(item, FieldAccessNode):
+        # v2b §77: same semantic checks at list-item position.
+        _check_field_access(item, symtab)
+        entry = symtab[item.record_name]
+        return entry.schema[item.field], f"{item.field} of {item.record_name}"
     raise _SemanticError(f"Unexpected list item {type(item).__name__}.")
 
 
@@ -263,10 +304,16 @@ def _check_remember_record(
     node: RememberRecordNode,
     symtab: dict[str, SymbolEntry],
 ) -> None:
-    # Field values are single tokens (v1d §61). Validation of field
-    # value types beyond "single token" is not in the v1 spec.
+    # Field values are single tokens (v1d §61), or v2b §77 field-access
+    # expressions. NumberLiteral and BareWord field values are trivially
+    # accepted (BareWords resolve at execution time per existing v1
+    # semantics). FieldAccessNode values get the same three semantic
+    # checks as any other v2b field access.
     if not node.fields:
         raise _SemanticError("A record needs at least one field.")
+    for _fname, fexpr in node.fields:
+        if isinstance(fexpr, FieldAccessNode):
+            _check_field_access(fexpr, symtab)
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +565,16 @@ def _resolve_value(
         if iterator.record_schemas is not None:
             return "record", "each"
         return iterator.scalar_type or "unknown", "each"
+    if isinstance(value_node, FieldAccessNode):
+        # v2b §77: <field> of <record> at the value position after an
+        # operator. Same semantic checks; resolved type is the field's
+        # scalar type from the record's schema.
+        _check_field_access(value_node, symtab)
+        entry = symtab[value_node.record_name]
+        return (
+            entry.schema[value_node.field],
+            f"{value_node.field} of {value_node.record_name}",
+        )
     raise _SemanticError("Unexpected value in condition.")
 
 
