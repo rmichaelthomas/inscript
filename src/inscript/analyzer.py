@@ -1,4 +1,4 @@
-"""Semantic analyzer for Inscript v1.
+"""Semantic analyzer for Inscript v1 / v2a / v2b / v2c / v2d / v3a.
 
 Sources:
 - inception §23 (semantic analysis: symbol table with types, structured
@@ -13,12 +13,32 @@ Sources:
 - v1d §62 (descending ranges are errors)
 - v1d §63 (gather range cap 10,000)
 - v1d §64 (structured results — no direct I/O)
+- v3a §108 (when condition/guard validation at registration time)
+- v3a §111 (action-block live-value ownership rules)
+- v3a §112 (finish is action-block-only — Phase 1 calls are errors)
+- v3a §117 (live values are adapter-owned after Phase 2 begins)
 
 The analyzer validates a SINGLE operation AST against the symbol table.
 For SequenceNode statements, the orchestrator (interpreter) iterates ops
 to honor stepwise execution semantics (v1d §56) — the analyzer's
 SequenceNode fallback is provided defensively but won't reflect mid-
 sequence state changes. The interpreter calls analyze() per op.
+
+v3a adds two optional analyze() parameters that carry listener-mode
+context:
+- `in_action_block` — True when the statement is being analyzed at
+  handler firing time. Controls FinishNode legality (§112) and the
+  live-value `remember`-overwrite check (§111/§117).
+- `live_value_names` — names declared by domain packs as live values.
+  `remember` on these inside action blocks is rejected (§111/§117);
+  `filter` on these is rejected in all contexts because `filter` is
+  destructive (§111).
+
+Action blocks themselves are NOT analyzed at WhenNode-registration time
+(§108): per the spec, "Name resolution within action blocks occurs at
+firing time, not at registration time, because actions may reference
+values created by other handlers or adapter updates." The registration-
+time check validates only the condition and unless guard.
 """
 
 from __future__ import annotations
@@ -40,6 +60,7 @@ from .parser import (
     EachPronoun,
     FieldAccessNode,
     FilterNode,
+    FinishNode,
     GatherNode,
     KeepNode,
     NameRef,
@@ -51,6 +72,7 @@ from .parser import (
     RememberValueNode,
     SequenceNode,
     ShowNode,
+    WhenNode,
 )
 from .result import InscriptResult, ResultStatus
 
@@ -125,6 +147,9 @@ def analyze(
     node: ASTNode,
     symbol_table: dict[str, SymbolEntry],
     iterator: IteratorContext | None = None,
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> ASTNode | InscriptResult:
     """Validate a single AST node.
 
@@ -135,15 +160,32 @@ def analyze(
     SequenceNode is validated by recursing through ops against the same
     symbol-table snapshot; the orchestrator should iterate per-op to
     honor v1d §56 stepwise execution.
+
+    v3a parameters:
+    - `in_action_block`: True when analyzing a statement inside a `when`
+      action block (firing-time analysis). Affects FinishNode legality
+      and the live-value `remember`-overwrite check.
+    - `live_value_names`: names declared by domain packs as live values.
+      None or an empty set disables live-value checks (Phase 1 sequential
+      analysis before any pack is registered).
     """
+    live_value_names = live_value_names or set()
     try:
         if isinstance(node, SequenceNode):
             for op in node.operations:
-                r = analyze(op, symbol_table, iterator)
+                r = analyze(
+                    op, symbol_table, iterator,
+                    in_action_block=in_action_block,
+                    live_value_names=live_value_names,
+                )
                 if isinstance(r, InscriptResult):
                     return r
             return node
-        _check(node, symbol_table, iterator)
+        _check(
+            node, symbol_table, iterator,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     except _SemanticError as e:
         return InscriptResult(
             status=ResultStatus.ERROR_SEMANTIC,
@@ -162,22 +204,39 @@ def _check(
     node: ASTNode,
     symtab: dict[str, SymbolEntry],
     iterator: IteratorContext | None,
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
+    live_value_names = live_value_names or set()
     if isinstance(node, RememberValueNode):
-        _check_remember_value(node, symtab, iterator)
+        _check_remember_value(
+            node, symtab, iterator,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, RememberListNode):
-        _check_remember_list(node, symtab)
+        _check_remember_list(
+            node, symtab,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, RememberRecordNode):
-        _check_remember_record(node, symtab)
+        _check_remember_record(
+            node, symtab,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, RememberCompositionNode):
         pass  # §23 line 466: names checked at call time, not here.
     elif isinstance(node, ShowNode):
         _check_show(node, symtab, iterator)
     elif isinstance(node, FilterNode):
-        _check_filter(node, symtab)
+        _check_filter(node, symtab, live_value_names=live_value_names)
     elif isinstance(node, KeepNode):
         # v2a §67: same semantic checks as filter — target must be a list,
-        # condition fields must resolve. No new constraint.
+        # condition fields must resolve. v3a §111: `keep` on live values
+        # is non-destructive and remains legal in all contexts.
         _check_keep(node, symtab)
     elif isinstance(node, CountNode):
         _check_count(node, symtab)
@@ -186,19 +245,42 @@ def _check(
     elif isinstance(node, CombineNode):
         _check_combine(node, symtab)
     elif isinstance(node, EachNode):
-        _check_each(node, symtab)
+        _check_each(
+            node, symtab,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, ChooseNode):
         # v2d §99–§102 — branch-by-branch validation with no iterator
         # context (choose has no iterator). Nested control flow inside
         # branches inherits the caller's iterator if any (e.g. choose
         # inside an each body is rejected at parse time, so this is
         # the no-iterator path in practice).
-        _check_choose(node, symtab, iterator)
+        _check_choose(
+            node, symtab, iterator,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, CompositionCallNode):
         _check_composition_call(node, symtab)
+    elif isinstance(node, WhenNode):
+        # v3a §108/§109: validate condition + unless at registration
+        # time. The action block itself is not analyzed here — name
+        # resolution within actions is deferred to firing time (§111).
+        _check_when(node, symtab)
+    elif isinstance(node, FinishNode):
+        # v3a §112: `finish` is legal only inside a `when` action block
+        # (directly, in a `choose` branch, or in a composition called
+        # from one). Phase 1 sequential `finish` calls are semantic
+        # errors at the call site.
+        _check_finish(node, in_action_block=in_action_block)
     elif isinstance(node, SequenceNode):
         for op in node.operations:
-            _check(op, symtab, iterator)
+            _check(
+                op, symtab, iterator,
+                in_action_block=in_action_block,
+                live_value_names=live_value_names,
+            )
     else:
         raise _SemanticError(f"unsupported AST node {type(node).__name__}")
 
@@ -212,8 +294,32 @@ def _check_remember_value(
     node: RememberValueNode,
     symtab: dict[str, SymbolEntry],
     iterator: IteratorContext | None,
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
+    _check_live_value_remember(node.name, in_action_block, live_value_names)
     _check_value_expr(node.value, symtab, iterator)
+
+
+def _check_live_value_remember(
+    name: str,
+    in_action_block: bool,
+    live_value_names: set[str] | None,
+) -> None:
+    """v3a §111/§117 — live values are adapter-owned after Phase 2
+    begins. `remember <name> with ...` inside an action block is a
+    semantic error when `<name>` was declared by a domain pack as a
+    live value. Phase 1 sequential `remember` is OK (it provides the
+    initial value before adapters dispatch)."""
+    if not in_action_block:
+        return
+    names = live_value_names or set()
+    if name in names:
+        raise _SemanticError(
+            f"'{name}' is a live value provided by the domain pack and "
+            f"cannot be overwritten during listener mode."
+        )
 
 
 def _check_value_expr(
@@ -236,15 +342,19 @@ def _check_value_expr(
     if isinstance(value_node, CompositionCallNode):
         # v2b §76 — composition call in value position. v2d §97 extends
         # this with parameter-mismatch checks at the call site, before
-        # body analysis runs.
+        # body analysis runs. v3a: the void-result check is done before
+        # body analysis so a structurally-mismatched call (e.g., capturing
+        # the value of a composition whose body is `finish`) surfaces
+        # the "doesn't return a value" framing rather than the body's
+        # context-specific error.
         _check_composition_call_shape(value_node, symtab)
-        _analyze_composition_body(value_node, symtab)
         verb = _composition_void_result_verb(value_node.name, symtab)
         if verb is not None:
             raise _SemanticError(
                 f"Composition '{value_node.name}' doesn't return a value — "
                 f"its last operation is '{verb}', which only has side effects."
             )
+        _analyze_composition_body(value_node, symtab)
         return
     _check(value_node, symtab, iterator)
 
@@ -287,6 +397,10 @@ def _side_effect_verb(
         # v2d §102 — `choose` evaluates a condition and runs a branch
         # for its side effects; it does not produce a value.
         return "choose"
+    if isinstance(node, FinishNode):
+        # v3a §112 — `finish` is side-effect-only (and total-stop).
+        # A composition whose last op is `finish` returns no value.
+        return "finish"
     if isinstance(node, (RememberListNode, RememberRecordNode, RememberCompositionNode)):
         return "remember"
     if isinstance(node, RememberValueNode):
@@ -339,7 +453,11 @@ def _check_field_access(
 def _check_remember_list(
     node: RememberListNode,
     symtab: dict[str, SymbolEntry],
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
+    _check_live_value_remember(node.name, in_action_block, live_value_names)
     if not node.items:
         raise _SemanticError("A list needs at least one item.")
     types: list[str] = []
@@ -389,7 +507,11 @@ def _infer_item_type(item: ASTNode, symtab: dict[str, SymbolEntry]) -> tuple[str
 def _check_remember_record(
     node: RememberRecordNode,
     symtab: dict[str, SymbolEntry],
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
+    _check_live_value_remember(node.name, in_action_block, live_value_names)
     # Field values are single tokens (v1d §61), or v2b §77 field-access
     # expressions. NumberLiteral and BareWord field values are trivially
     # accepted (BareWords resolve at execution time per existing v1
@@ -518,8 +640,21 @@ def _check_show(
 # ---------------------------------------------------------------------------
 
 
-def _check_filter(node: FilterNode, symtab: dict[str, SymbolEntry]) -> None:
+def _check_filter(
+    node: FilterNode,
+    symtab: dict[str, SymbolEntry],
+    *,
+    live_value_names: set[str] | None = None,
+) -> None:
     name = node.target.name
+    # v3a §111/§117: `filter` is destructive. Adapter-owned live values
+    # cannot be mutated by user code at any point — Phase 1 or Phase 2.
+    if live_value_names and name in live_value_names:
+        raise _SemanticError(
+            f"'{name}' is a live value provided by the domain pack. "
+            f"'filter' is destructive and can't modify it — use 'keep' "
+            f"to read items without changing the source."
+        )
     entry = _require_list(name, symtab, verb="filter")
     iterator = _make_iterator(name, entry)
     _check_condition(node.condition, symtab, iterator)
@@ -714,11 +849,21 @@ def _check_gather(node: GatherNode) -> None:
         )
 
 
-def _check_each(node: EachNode, symtab: dict[str, SymbolEntry]) -> None:
+def _check_each(
+    node: EachNode,
+    symtab: dict[str, SymbolEntry],
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
+) -> None:
     name = node.collection.name
     entry = _require_list(name, symtab, verb="iterate over")
     iterator = _make_iterator(name, entry)
-    _check(node.action, symtab, iterator)
+    _check(
+        node.action, symtab, iterator,
+        in_action_block=in_action_block,
+        live_value_names=live_value_names,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +947,9 @@ def _check_choose(
     node: ChooseNode,
     symtab: dict[str, SymbolEntry],
     iterator: IteratorContext | None,
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
     """Validate each branch's condition + action. Conditions use the
     choose-specific operand resolver (no iterator context per §100);
@@ -811,7 +959,11 @@ def _check_choose(
     for br in node.branches:
         if br.condition is not None:
             _check_choose_condition(br.condition, symtab)
-        _check(br.action, symtab, iterator)
+        _check(
+            br.action, symtab, iterator,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
 
 
 def _check_choose_condition(
@@ -839,6 +991,46 @@ def _check_choose_condition(
             _require_numeric(value_type, value_label, f"not {inner}")
         return
     raise _SemanticError(f"Unknown comparison operator '{cond.op}'.")
+
+
+# ---------------------------------------------------------------------------
+# when / finish (v3a §108, §109, §112)
+# ---------------------------------------------------------------------------
+
+
+def _check_when(
+    node: WhenNode,
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    """v3a §108/§109: registration-time validation for a `when` handler.
+
+    Only the condition and (optional) unless guard are validated here —
+    all names referenced in either must exist in the symbol table at the
+    point the `when` statement is encountered (§108 "Registration-time
+    name resolution"). The action block itself is not analyzed at
+    registration; per §108/§111 name resolution inside actions is
+    deferred to firing time because actions may reference values created
+    by other handlers or by adapter updates.
+    """
+    _check_choose_condition(node.condition, symtab)
+    if node.unless is not None:
+        _check_choose_condition(node.unless, symtab)
+
+
+def _check_finish(
+    node: FinishNode,
+    *,
+    in_action_block: bool,
+) -> None:
+    """v3a §112: `finish` is the listener-mode exit verb. It is legal
+    only inside a `when` action block — directly, in a `choose` branch,
+    or in a composition called from one. Phase 1 sequential calls (or
+    composition-bodied `finish` reached during sequential mode) are
+    semantic errors at the call site."""
+    if not in_action_block:
+        raise _SemanticError(
+            "'finish' can only be used inside an event handler."
+        )
 
 
 def _resolve_choose_operand(
