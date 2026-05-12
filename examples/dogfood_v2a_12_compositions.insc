@@ -1,0 +1,26 @@
+remember a doc called doc-1 with domain as inscript and class as inception and words as 10831
+remember a doc called doc-2 with domain as mobius and class as binder and words as 10399
+remember a doc called doc-3 with domain as mobius and class as checkpoint and words as 10190
+remember a doc called doc-4 with domain as mobius and class as checkpoint and words as 8077
+remember a doc called doc-5 with domain as mobius and class as checkpoint and words as 7654
+remember a doc called doc-6 with domain as mobius and class as checkpoint and words as 7506
+remember a doc called doc-7 with domain as mobius and class as checkpoint and words as 7439
+remember a doc called doc-8 with domain as markings and class as addendum and words as 7417
+remember a doc called doc-28 with domain as cnxct and class as inception and words as 5057
+
+remember a list called docs with doc-1 and doc-2 and doc-3 and doc-4 and doc-5 and doc-6 and doc-7 and doc-8 and doc-28
+
+remember how to find-mobius: keep the docs where domain is equal to mobius
+remember how to find-checkpoints: keep the docs where class is checkpoint
+remember how to find-large: keep the docs where words is above 7500
+
+find-mobius
+find-checkpoints
+find-large
+
+find-mobius
+find-large
+
+count the docs
+
+remember the captured called captured from find-mobius

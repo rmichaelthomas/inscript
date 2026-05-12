@@ -1,0 +1,20 @@
+remember a doc called doc-1 with domain as inscript and class as inception and words as 10831
+remember a doc called doc-2 with domain as mobius and class as binder and words as 10399
+remember a doc called doc-3 with domain as mobius and class as checkpoint and words as 10190
+remember a doc called doc-4 with domain as mobius and class as checkpoint and words as 8077
+remember a doc called doc-5 with domain as mobius and class as checkpoint and words as 7654
+
+remember a list called docs with doc-1 and doc-2 and doc-3 and doc-4 and doc-5
+
+each the docs show domain and class
+
+each the docs show domain and class and words
+
+each the docs show words and domain
+
+each the docs show class
+
+remember the large called large from keep the docs where words is above 7000
+each the large show domain and class and words
+
+each the docs show domain and class and class

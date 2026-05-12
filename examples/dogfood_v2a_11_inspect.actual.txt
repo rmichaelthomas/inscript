@@ -1,0 +1,18 @@
+I understand this as: remember a doc called doc-1 with domain as inscript and class as inception and words as 10831
+I understand this as: remember a doc called doc-2 with domain as mobius and class as binder and words as 10399
+I understand this as: remember a doc called doc-19 with domain as mobius and class as spec and words as 6293
+I understand this as: remember a doc called doc-28 with domain as cnxct and class as inception and words as 5057
+I understand this as: show domain of doc-1
+inscript
+I understand this as: show class of doc-19
+spec
+I understand this as: show words of doc-28
+5057
+I understand this as: show domain of doc-2
+mobius
+I understand this as: remember a list called docs with doc-1 and doc-2 and doc-19 and doc-28
+I understand this as: show words of docs
+Error: 'of' needs a record. 'docs' is a list of records.
+Error: I didn't expect 'and' here.
+Error: I couldn't parse the condition after 'where'. Conditions look like '[field] is [comparison] [value]', for example: total is above 50.
+Error: I didn't expect 'of' here.

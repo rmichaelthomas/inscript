@@ -1,0 +1,14 @@
+PROGRAM 10 — tabular display (D1 at scale, ordering probes)
+PREDICTED:
+
+each the docs show domain and class                 -> 5 lines of domain: X, class: Y
+each the docs show domain and class and words       -> 5 lines of three-field per record
+each the docs show words and domain                 -> field order is USER's order (words first)
+each the docs show class                            -> single field unchanged: bare values
+
+keep+capture pattern:
+each the large show domain and class and words      -> only matching docs (3: words > 7000)
+
+each the docs show domain and class and class       -> ??? duplicate field
+                                                       Likely outcomes: (a) two columns both saying class:
+                                                       (b) parse error / amber. v2a §69 doesn't lock either.

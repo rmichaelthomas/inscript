@@ -1,0 +1,18 @@
+PROGRAM 11 — `of` inspection probes
+PREDICTED:
+
+show domain of doc-1                                          -> inscript
+show class of doc-19                                          -> spec
+show words of doc-28                                          -> 5057
+show domain of doc-2                                          -> mobius
+
+show words of docs (docs is a LIST, not a record)             -> semantic error: 'of' needs a record
+
+show domain of doc-1 and class of doc-19                      -> the `and` between two `show ... of ...` doesn't
+                                                                fit op-sequencing (RHS isn't a verb). Likely parse error.
+
+keep the docs where words of doc-1 is above 5000              -> `of` in a where clause is NOT allowed by v2a §68.
+                                                                Likely parse error.
+
+remember a copy called holder with words of doc-1             -> `of` in value position after `with` is NOT allowed.
+                                                                Likely parse error.

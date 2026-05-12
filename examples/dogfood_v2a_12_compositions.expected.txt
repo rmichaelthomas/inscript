@@ -1,0 +1,23 @@
+PROGRAM 12 — reusable keep compositions
+PREDICTED:
+
+find-mobius                  -> 6 mobius docs auto-shown (doc-2,3,4,5,6,7)
+find-checkpoints             -> 6 checkpoint docs (doc-3,4,5,6,7 + ... actually all checkpoint docs in this slice)
+                                Let me recount: doc-3,4,5,6,7 are checkpoint. Also doc-? — only these 5 in this slice are checkpoint.
+                                Actually I trimmed the corpus. Looking again at the records:
+                                doc-1 inception, doc-2 binder, doc-3,4,5,6,7 checkpoint, doc-8 addendum, doc-28 inception
+                                So find-checkpoints -> 5 checkpoint docs
+find-large (words > 7500)    -> doc-1,2,3,4,5 (10831, 10399, 10190, 8077, 7654)
+                                actually 7654 IS > 7500, so 5 docs.
+
+Calling find-mobius again, find-large again -> same output as first call (D3 dissolves)
+
+count the docs               -> 9 (UNCHANGED after 5 keep-composition calls)
+
+remember the captured called captured from find-mobius
+                             -> EXPECTED GAP. The interpreter's _evaluate_expression for
+                                CompositionCallNode raises "Composition calls can't be used as
+                                a value in this version." This will be a SEMANTIC ERROR. Worth
+                                logging — `keep`'s natural composition wrapper can be called for
+                                its side effect (auto-show) but its result CANNOT be captured
+                                via remember/from because compositions don't return values.

@@ -1,0 +1,16 @@
+remember a doc called doc-1 with domain as inscript and class as inception and words as 10831
+remember a doc called doc-2 with domain as mobius and class as binder and words as 10399
+remember a doc called doc-19 with domain as mobius and class as spec and words as 6293
+remember a doc called doc-28 with domain as cnxct and class as inception and words as 5057
+
+show domain of doc-1
+show class of doc-19
+show words of doc-28
+show domain of doc-2
+
+remember a list called docs with doc-1 and doc-2 and doc-19 and doc-28
+show words of docs
+
+show domain of doc-1 and class of doc-19
+keep the docs where words of doc-1 is above 5000
+remember a copy called holder with words of doc-1

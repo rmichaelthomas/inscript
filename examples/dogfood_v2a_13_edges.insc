@@ -1,0 +1,13 @@
+remember a doc called doc-1 with domain as inscript and class as inception and words as 10831
+remember a doc called doc-2 with domain as mobius and class as binder and words as 10399
+remember a doc called doc-3 with domain as mobius and class as checkpoint and words as 10190
+
+remember a list called docs with doc-1 and doc-2 and doc-3
+
+keep the docs where words is above 9000 and show docs
+
+each the docs keep where words is above 9000
+
+each the docs show domain and class and missing
+
+keep the docs where domain is equal to mobius or words is above 10500

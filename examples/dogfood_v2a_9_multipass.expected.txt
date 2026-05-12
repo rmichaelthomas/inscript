@@ -1,0 +1,26 @@
+PROGRAM 9 — keep at scale (multi-pass, D2 verification)
+PREDICTED:
+
+count the docs                                            -> 30
+keep ... domain is equal to mobius via remember-from      -> mob captures 24 mobius docs
+count the mob                                             -> 24
+count the docs                                            -> 30  (source untouched)
+
+keep ... class is checkpoint via remember-from            -> checkpoints captures 19 checkpoint docs
+count the checkpoints                                     -> 19
+count the docs                                            -> 30  (still untouched)
+
+keep ... words is above 7000 via remember-from            -> large captures 12 docs (rows 1-12)
+count the large                                           -> 12
+count the docs                                            -> 30
+
+keep the large where domain is equal to mobius            -> major captures from large, NOT from docs.
+                                                             Of 12 large docs, 9 are mobius (doc-2,3,4,5,6,7,9,11,12)
+count the major                                           -> 9
+count the large                                           -> 12  (large also unchanged)
+count the docs                                            -> 30  (still unchanged)
+
+each the major show domain and class and words            -> 9 lines of multi-field display
+
+HEADLINE: After FOUR independent keep passes plus a chained narrowing,
+the original docs list is still 30 records — the D2 fix at scale.
