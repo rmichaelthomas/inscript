@@ -17,23 +17,24 @@ from inscript.vocabulary import (
 
 
 def test_verb_count():
-    # v2d §104: 9 verbs (was 8 in v2a §73; `choose` promoted from the
-    # v2-deferred table to an active verb in v2d §99).
-    assert len(VERBS) == 9
+    # v3a §124: 10 verbs (was 9 in v2d §104; `finish` added in v3a §112
+    # for immediate listener-mode shutdown).
+    assert len(VERBS) == 10
     assert VERBS == {
         "remember", "show", "filter", "keep", "count",
-        "gather", "combine", "each", "choose",
+        "gather", "combine", "each", "choose", "finish",
     }
 
 
 def test_connective_count():
-    # v2d §104: 12 connectives (was 10 in v2a §73; `if` and `otherwise`
-    # added in v2d §99 for `choose if … : … otherwise …`).
-    assert len(CONNECTIVES) == 12
+    # v3a §124: 14 connectives (was 12 in v2d §104; `when` and `unless`
+    # promoted from V2_RESERVED in v3a §108/§109 for the listener model).
+    assert len(CONNECTIVES) == 14
     assert CONNECTIVES == {
         "where", "and", "or", "from", "with",
         "called", "to", "how", "as", "of",
         "if", "otherwise",
+        "when", "unless",
     }
 
 
@@ -54,24 +55,24 @@ def test_delimiter_count():
 
 
 def test_v2_reserved():
-    # v2d §104: 4 deferred words (was 5 in v2a §73). `choose` was
-    # promoted to an active verb in v2d §99; `transform`, `compare`,
-    # `when`, and `unless` remain deferred per v2d §103.
-    assert len(V2_RESERVED) == 4
-    assert V2_RESERVED == {"transform", "compare", "when", "unless"}
+    # v3a §124: 2 deferred verbs remaining. `when` and `unless` moved
+    # to CONNECTIVES in v3a §108/§109; `transform` and `compare`
+    # continue to be deferred per v2d §103 / v3a §124.
+    assert len(V2_RESERVED) == 2
+    assert V2_RESERVED == {"transform", "compare"}
 
 
 def test_multi_word_reserved():
     assert MULTI_WORD_RESERVED == {"equal"}
 
 
-def test_total_reserved_count_is_33():
-    # v2d §104: 33 reserved words total (was 31 in v2a §73).
-    # Delta: +1 `choose` promoted from deferred to verb (net +0 across
-    # VERBS + V2_RESERVED), +2 connectives (`if`, `otherwise`).
-    # 9 verbs + 12 connectives + 4 operators + 1 multi-word + 3 articles
-    # + 2 v2-deferred verbs + 2 v2-deferred connectives = 33.
-    assert len(ALL_RESERVED) == 33
+def test_total_reserved_count_is_34():
+    # v3a §124: 34 reserved words total (was 33 in v2d §104).
+    # Delta: +1 `finish` verb. `when`/`unless` shifted from V2_RESERVED
+    # into CONNECTIVES (net zero) — they were already counted in the 33.
+    # 10 verbs + 14 connectives + 4 operators + 1 multi-word + 3 articles
+    # + 2 v2-deferred verbs = 34.
+    assert len(ALL_RESERVED) == 34
 
 
 def test_reserved_sets_are_disjoint():
@@ -107,7 +108,7 @@ def test_verb_signatures_cover_all_verbs():
 
 
 def test_verb_signature_slot_shapes():
-    # Sanity-check slot lists from inception §17, refined per v1b/v1d/v2a/v2d.
+    # Sanity-check slot lists from inception §17, refined per v1b/v1d/v2a/v2d/v3a.
     assert VERB_SIGNATURES["show"] == ["target"]
     assert VERB_SIGNATURES["count"] == ["target"]
     assert VERB_SIGNATURES["combine"] == ["target"]
@@ -121,6 +122,27 @@ def test_verb_signature_slot_shapes():
     assert VERB_SIGNATURES["choose"] == [
         "condition", "consequence", "alternative",
     ]
+    # v3a §112: finish is slot-less — exits listener mode immediately.
+    assert VERB_SIGNATURES["finish"] == []
+
+
+def test_finish_is_classified_as_verb():
+    # v3a §112: `finish` is a verb, not a connective. Used as a leaf
+    # statement inside `when` action blocks.
+    assert reserved_category("finish") == "verb"
+    assert "finish" in VERBS
+
+
+def test_when_and_unless_are_classified_as_connectives():
+    # v3a §108/§109: `when` registers a reactive handler; `unless` is a
+    # guard clause on `when`. They are connectives (statement-introducing
+    # in `when`'s case), not verbs.
+    assert reserved_category("when") == "connective"
+    assert reserved_category("unless") == "connective"
+    assert "when" in CONNECTIVES
+    assert "unless" in CONNECTIVES
+    assert "when" not in V2_RESERVED
+    assert "unless" not in V2_RESERVED
 
 
 def test_token_type_enum_members():

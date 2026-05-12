@@ -1,4 +1,4 @@
-"""Lexer for Inscript v1 + v2c.
+"""Lexer for Inscript v1 + v2c + v3a.
 
 Sources:
 - inception §22 (lexer specification)
@@ -9,6 +9,8 @@ Sources:
 - v2c §89 (QUOTED_STRING bypasses vocabulary lookup)
 - v2c §91 (quoted content is lowercased, consistent with the rest of the language)
 - v2c §92 (empty quotes `""` are a parse error)
+- v3a §110 (leading-space indentation tracked for `when` action blocks;
+  tabs in leading indentation are rejected with a clear LexError)
 
 Pipeline per BUILD_PLAN Phase 2, extended for v2c:
 1. Empty / whitespace-only line → return [] (v1c §48).
@@ -27,10 +29,18 @@ Pipeline per BUILD_PLAN Phase 2, extended for v2c:
    back to NUMBER (digits + optional decimal point, §22 line 428) or
    UNKNOWN.
 
+Indentation (v3a §110):
+- `leading_indent(line)` returns the count of leading space characters.
+- A tab in the leading-whitespace run is rejected with LexError. Tabs
+  later in the line continue to be treated as ordinary whitespace by the
+  tokenizer (existing v1 behavior unchanged).
+- Blank / whitespace-only lines have no meaningful indentation — they
+  return 0 and the v3a block parser skips them per v1c §48.
+
 Errors raised:
-- LexError for unclosed quotes (v2c §86) and empty quotes (v2c §92).
-  The CLI wrapper converts these into ERROR_PARSE results so the
-  five-outcome taxonomy (v1c §50) is preserved.
+- LexError for unclosed quotes (v2c §86), empty quotes (v2c §92), and
+  tab-indented lines (v3a §110). The CLI wrapper converts these into
+  ERROR_PARSE results so the five-outcome taxonomy (v1c §50) is preserved.
 """
 
 from __future__ import annotations
@@ -71,6 +81,31 @@ def tokenize(line: str) -> list[Token]:
     raw: list[tuple[str, int, bool]] = _split_raw(line)
     cleaned: list[tuple[str, int, bool]] = _strip_and_lower(raw)
     return _classify(cleaned)
+
+
+def leading_indent(line: str) -> int:
+    """Return the count of leading-space characters on `line` (v3a §110).
+
+    Tabs in the leading-whitespace run are rejected with LexError so the
+    user gets a clear message rather than the silent visual ambiguity of
+    mixed tabs and spaces. Blank lines return 0 — the v3a block parser
+    skips them rather than treating them as block boundaries (v1c §48).
+    """
+    if not line.strip():
+        return 0
+    count = 0
+    for c in line:
+        if c == " ":
+            count += 1
+            continue
+        if c == "\t":
+            raise LexError(
+                "Indented lines must use spaces, not tabs. v3a §110 — "
+                "each line in an action block uses the same number of "
+                "leading spaces."
+            )
+        break
+    return count
 
 
 def _split_raw(line: str) -> list[tuple[str, int, bool]]:
