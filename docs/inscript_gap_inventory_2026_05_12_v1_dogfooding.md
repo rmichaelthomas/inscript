@@ -7,6 +7,7 @@
 **Author:** Rob Thomas / R. Michael Thomas
 **Document type:** Gap inventory — scoped to Inscript v1 dogfooding. Seven dogfooding programs (plus four probe sub-programs) were written and executed against the built interpreter (`rmichaelthomas/inscript`). Each gap is categorized as **v1-patch** (fixable without spec change), **v2-design** (requires new vocabulary or semantics), or **UX** (interpreter output quality).
 **Relationship to prior documents:** Extends the five-document Inscript v1 specification (inception checkpoint v1, addenda v1a/v1b/v1c/v1d). Does not modify any locked decision. Surfaces inputs for future specification work and v1-patch fixes.
+**Downstream document:** The v2-design items in §"Category: v2-design" below have been triaged in `inscript_v2_design_triage_2026_05_12.md` — re-tiering D5 and D6 as v1.1-patches, grouping D1/D2/D4 into a single proposed v2 addendum, and reserving D7 for its own checkpoint.
 
 ---
 
