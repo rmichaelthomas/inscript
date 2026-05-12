@@ -4,7 +4,7 @@
 
 Inscript is a prose-as-syntax programming language designed by Rob Thomas (R. Michael Thomas). You are the builder. Rob is the architect. All design decisions are locked in the specification documents.
 
-**Current state (May 12, 2026):** v1 interpreter + v2a (`keep` verb, `of` connective, multi-field `each show`, descriptor preservation) + UX polish (`--quiet` flag, named-offender error wording, auto-show truncation) + v2.1-patches (duplicate-field rejection, `of`-on-list suggestion, list-operations-only error) + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings). The pipeline architecture from §8–§9 is unchanged through all extensions.
+**Current state (May 12, 2026):** v1 interpreter + v2a (`keep` verb, `of` connective, multi-field `each show`, descriptor preservation) + UX polish (`--quiet` flag, named-offender error wording, auto-show truncation) + v2.1-patches (duplicate-field rejection, `of`-on-list suggestion, list-operations-only error) + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings) + v2d (composition parameters with `from`, `choose` verb with `if`/`otherwise`). The pipeline architecture from §8–§9 is unchanged through all extensions.
 
 ## Critical Rules
 
@@ -40,17 +40,18 @@ Located in `docs/spec/`. Read the relevant section before writing code that touc
 - `inscript_addendum_v2b_composition_returns.md` — §76 composition return values (Path A: implicit return of last op; error at call site for void-result), §77 generalize `of` to any value position (single-level only), §78 list/iteration model clarification, §79–§81 UX items (U7/U8/U9). No vocabulary changes. Test sentences 60–68.
 - `inscript_addendum_v2c_multi_word_strings.md` — D7 resolution: quoting mechanism for multi-word string values. §86 lexer quote-state, §87 `QUOTED_STRING` in value positions only (rejected in name/field positions with hyphenation guidance), §88 literal display via `show "..."`, §89 quoted reserved words bypass vocabulary exclusion, §90 conditional rendering (quote only multi-word or reserved-word values), §91 case normalization inside quotes, §92 empty quotes rejected. No new vocabulary. Test sentences 69–80.
 - `inscript_checkpoint_v2c_multi_word_strings.md` — D7 analysis (context for the v2c addendum: three approaches evaluated; not a locked spec).
+- `inscript_addendum_v2d_parameters_and_branching.md` — **LOCKED + IMPLEMENTED.** Resolves Q9 (composition parameters) fully and promotes `choose` from deferred to active. §96 named parameter declared with `from <param>` in the definition and passed with `from <name>` at the call site (single parameter, local scope with global shadow/restore, deep-copy semantics, names-only); §97 parameter-mismatch errors at the call site; §98 parameterized calls in value-capture position via peek-ahead (`remember … from <comp> from <name>`); §99 `choose if <cond>: <action> [otherwise [if <cond>:] <action>]*` with `if` and `otherwise` as new connectives; §100 conditions reuse value-expression operands (both sides; `of` on the left supported); §101 multi-way branching via `otherwise if` (short-circuit) and multi-statement actions via `and` inside a branch; §102 `choose` is side-effect only (added to v2b §76 list; `choose` inside `each` deferred). §103 `transform` and `compare` continue deferral. Vocabulary: **9 verbs, 12 connectives, 33 reserved words**. Test sentences 81–95. v2a §70's composition-chaining error path is superseded — `<comp> from <name>` is now parameter passing.
 
 **Test specification:**
 
-- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, 35–48 in v1d §65, 49–59 in v2a §74, 60–68 in v2b §83, 69–80 in v2c §94.
+- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, 35–48 in v1d §65, 49–59 in v2a §74, 60–68 in v2b §83, 69–80 in v2c §94, 81–95 in v2d §105.
 
-**Reading order for a fresh session:** inception checkpoint → v1a/v1b/v1c/v1d in order → v2a → v2b → v2c. Each addendum locks decisions on top of all prior; nothing is retracted.
+**Reading order for a fresh session:** inception checkpoint → v1a/v1b/v1c/v1d in order → v2a → v2b → v2c → v2d. Each addendum locks decisions on top of all prior; nothing is retracted.
 
 ## Commands
 
 ```bash
-# Run all tests (418 passing as of v2a + UX polish + v2.1-patches)
+# Run all tests (501 passing as of v2d — composition parameters + choose)
 pytest tests/ -v
 
 # Run a single module's tests

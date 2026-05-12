@@ -2,4 +2,5 @@ I understand this as: remember a doc called doc-a with words as 10000
 I understand this as: remember a doc called doc-b with words as 4000
 I understand this as: remember a list called docs with doc-a and doc-b
 I understand this as: remember how to find-large: filter the docs where words is above 5000
-Error: Composition chaining isn't supported yet. Call 'find-large' on its own line.
+I understand this as: find-large from docs
+Error: 'find-large' doesn't take an input. Call it on its own: find-large.

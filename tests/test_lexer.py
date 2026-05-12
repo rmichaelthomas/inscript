@@ -497,3 +497,54 @@ def test_quoted_string_position_points_at_opening_quote():
     toks = tokenize(line)
     quoted = next(t for t in toks if t.type is TokenType.QUOTED_STRING)
     assert line[quoted.position] == '"'
+
+
+# ---------- v2d §99: `choose` verb + `if` / `otherwise` connectives ----------
+
+
+def test_choose_is_a_verb_token():
+    toks = tokenize("choose if score is above 50: show pass")
+    assert toks[0].type is TokenType.VERB
+    assert toks[0].value == "choose"
+
+
+def test_if_is_a_connective_token():
+    toks = tokenize("choose if score is above 50: show pass")
+    assert toks[1].type is TokenType.CONNECTIVE
+    assert toks[1].value == "if"
+
+
+def test_otherwise_is_a_connective_token():
+    toks = tokenize("choose if score is above 50: show pass otherwise show fail")
+    otherwise = next(t for t in toks if t.value == "otherwise")
+    assert otherwise.type is TokenType.CONNECTIVE
+
+
+def test_choose_if_otherwise_full_sentence_classification():
+    toks = tokenize(
+        "choose if score is above 50: show pass otherwise show fail"
+    )
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "choose"),
+        (TokenType.CONNECTIVE, "if"),
+        (TokenType.UNKNOWN, "score"),
+        (TokenType.OPERATOR, "is"),
+        (TokenType.OPERATOR, "above"),
+        (TokenType.NUMBER, "50"),
+        (TokenType.DELIMITER, ":"),
+        (TokenType.VERB, "show"),
+        (TokenType.UNKNOWN, "pass"),
+        (TokenType.CONNECTIVE, "otherwise"),
+        (TokenType.VERB, "show"),
+        (TokenType.UNKNOWN, "fail"),
+    ]
+
+
+def test_quoted_if_and_otherwise_emit_quoted_string_not_connective():
+    # v2c §89 — quotes bypass vocabulary lookup; `"if"` is data.
+    toks = tokenize('remember a value called label with "if"')
+    label = next(t for t in toks if t.type is TokenType.QUOTED_STRING)
+    assert label.value == "if"
+    toks = tokenize('remember a value called label with "otherwise"')
+    label = next(t for t in toks if t.type is TokenType.QUOTED_STRING)
+    assert label.value == "otherwise"

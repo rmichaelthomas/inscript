@@ -7,6 +7,8 @@ import pytest
 from inscript.lexer import tokenize
 from inscript.parser import (
     BareWord,
+    ChooseBranch,
+    ChooseNode,
     CombineNode,
     CompositionCallNode,
     CompoundConditionNode,
@@ -14,10 +16,12 @@ from inscript.parser import (
     CountNode,
     EachNode,
     EachPronoun,
+    FieldAccessNode,
     FilterNode,
     GatherNode,
     NameRef,
     NumberLiteral,
+    QuotedString,
     RememberCompositionNode,
     RememberListNode,
     RememberRecordNode,
@@ -444,5 +448,206 @@ SYNTAX_ERROR_SENTENCES = [
 @pytest.mark.parametrize("line", SYNTAX_ERROR_SENTENCES)
 def test_syntax_errors_produce_error_parse(line):
     out = parse_line(line)
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+# ---------- v2d §96: composition parameters ----------
+
+
+def test_composition_definition_with_parameter():
+    ast = parse_line(
+        "remember how to find-big from data: keep the data where total is above 50"
+    )
+    assert isinstance(ast, RememberCompositionNode)
+    assert ast.name == "find-big"
+    assert ast.param == "data"
+
+
+def test_composition_definition_without_parameter_has_none_param():
+    ast = parse_line(
+        "remember how to show-all: show orders"
+    )
+    assert isinstance(ast, RememberCompositionNode)
+    assert ast.param is None
+
+
+def test_composition_definition_param_reserved_word_rejected():
+    out = parse_line(
+        "remember how to find-big from filter: keep the orders where total is above 50"
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "reserved" in out.message
+
+
+def test_composition_call_with_parameter_argument():
+    ast = parse_line("find-big from orders", comps={"find-big"})
+    assert isinstance(ast, CompositionCallNode)
+    assert ast.name == "find-big"
+    assert ast.arg == "orders"
+
+
+def test_composition_call_without_parameter_argument():
+    ast = parse_line("find-big", comps={"find-big"})
+    assert isinstance(ast, CompositionCallNode)
+    assert ast.name == "find-big"
+    assert ast.arg is None
+
+
+def test_composition_call_arg_must_be_a_name_not_a_literal():
+    out = parse_line("find-big from 5", comps={"find-big"})
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_composition_call_arg_must_be_a_name_not_a_reserved_word():
+    # v2d §96: names-only — reserved words are rejected at parse time.
+    out = parse_line("find-big from filter", comps={"find-big"})
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "reserved" in out.message
+
+
+def test_v2a_70_chaining_error_path_is_removed():
+    """v2d §96 supersedes v2a §70: `<comp> from <name>` is now parameter
+    passing, not a chaining error. The old wording must not appear."""
+    out = parse_line("find-large from docs", comps={"find-large"})
+    # Either a successful parse (parser-level) — Phase 5 catches the
+    # mismatch semantically — or some other error, but NEVER the
+    # superseded v2a §70 wording.
+    if isinstance(out, InscriptResult):
+        assert "Composition chaining isn't supported" not in (out.message or "")
+
+
+def test_remember_from_composition_with_parameter_peek_ahead():
+    """v2d §98 — `remember … from <comp> from <name>` is the two-from
+    value-capture shape. Outer from = value capture; inner from = param."""
+    ast = parse_line(
+        "remember the results called big from find-big from orders",
+        comps={"find-big"},
+    )
+    assert isinstance(ast, RememberValueNode)
+    assert ast.name == "big"
+    assert isinstance(ast.value, CompositionCallNode)
+    assert ast.value.name == "find-big"
+    assert ast.value.arg == "orders"
+
+
+def test_remember_from_composition_without_parameter_still_works():
+    ast = parse_line(
+        "remember the n called n from count-active",
+        comps={"count-active"},
+    )
+    assert isinstance(ast, RememberValueNode)
+    assert isinstance(ast.value, CompositionCallNode)
+    assert ast.value.name == "count-active"
+    assert ast.value.arg is None
+
+
+# ---------- v2d §99–§102: choose verb ----------
+
+
+def test_choose_simple_if_otherwise():
+    ast = parse_line(
+        'choose if score is above 50: show "pass" otherwise show "fail"'
+    )
+    assert isinstance(ast, ChooseNode)
+    assert len(ast.branches) == 2
+    first, last = ast.branches
+    assert isinstance(first.condition, ConditionNode)
+    assert first.condition.field == NameRef("score")
+    assert first.condition.op == "above"
+    assert first.condition.value == NumberLiteral(50)
+    assert isinstance(first.action, ShowNode)
+    assert isinstance(first.action.target, QuotedString)
+    assert first.action.target.content == "pass"
+    assert last.condition is None
+    assert isinstance(last.action, ShowNode)
+
+
+def test_choose_without_otherwise():
+    ast = parse_line('choose if score is above 50: show "pass"')
+    assert isinstance(ast, ChooseNode)
+    assert len(ast.branches) == 1
+    assert ast.branches[0].condition is not None
+
+
+def test_choose_multi_way_otherwise_if_chain():
+    ast = parse_line(
+        'choose if level is above 8: show "high" '
+        'otherwise if level is above 3: show "medium" '
+        'otherwise show "low"'
+    )
+    assert isinstance(ast, ChooseNode)
+    assert len(ast.branches) == 3
+    # All but the last branch carry a condition.
+    assert ast.branches[0].condition is not None
+    assert ast.branches[1].condition is not None
+    assert ast.branches[2].condition is None
+
+
+def test_choose_multi_statement_action_with_and():
+    ast = parse_line(
+        'choose if score is above 50: show "pass" and remember a value called result with pass '
+        'otherwise show "fail" and remember a value called result with fail'
+    )
+    assert isinstance(ast, ChooseNode)
+    assert len(ast.branches) == 2
+    # Each branch's action is a SequenceNode of two operations.
+    for br in ast.branches:
+        assert isinstance(br.action, SequenceNode)
+        assert len(br.action.operations) == 2
+
+
+def test_choose_with_compound_condition():
+    ast = parse_line(
+        'choose if score is above 50 and color is red: show "match"'
+    )
+    assert isinstance(ast, ChooseNode)
+    assert isinstance(ast.branches[0].condition, CompoundConditionNode)
+    assert ast.branches[0].condition.connector == "and"
+
+
+def test_choose_with_of_on_left_side_of_condition():
+    """v2d §100 — value expressions on both sides; `of` works on the left."""
+    ast = parse_line('choose if total of o1 is above 50: show "big"')
+    assert isinstance(ast, ChooseNode)
+    cond = ast.branches[0].condition
+    assert isinstance(cond, ConditionNode)
+    assert isinstance(cond.field, FieldAccessNode)
+    assert cond.field.field == "total"
+    assert cond.field.record_name == "o1"
+
+
+def test_choose_with_of_on_both_sides_of_condition():
+    ast = parse_line(
+        'choose if total of o1 is above total of o2: show "o1 bigger"'
+    )
+    assert isinstance(ast, ChooseNode)
+    cond = ast.branches[0].condition
+    assert isinstance(cond.field, FieldAccessNode)
+    assert isinstance(cond.value, FieldAccessNode)
+
+
+def test_choose_inside_each_is_a_parse_error():
+    """v2d §102 — `choose` inside `each` is deferred."""
+    out = parse_line(
+        'each the orders choose if total is above 50: show "big"'
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "can't appear inside 'each'" in out.message
+    assert "keep" in out.message
+
+
+def test_choose_missing_if_after_verb_is_a_parse_error():
+    out = parse_line('choose score is above 50: show "pass"')
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_choose_missing_colon_is_a_parse_error():
+    out = parse_line('choose if score is above 50 show "pass"')
     assert isinstance(out, InscriptResult)
     assert out.status is ResultStatus.ERROR_PARSE

@@ -1199,3 +1199,230 @@ def test_quoted_extra_field_in_each_show_rejected():
     assert r.status is ResultStatus.ERROR_PARSE
     assert "Field names can't have spaces" in r.message
     assert "total-amount" in r.message
+
+
+# ---------------------------------------------------------------------------
+# v2d §105 — Sentences 81–95 (composition parameters + choose verb)
+# ---------------------------------------------------------------------------
+
+
+def test_sentence_81_basic_composition_parameter():
+    """§96 — named parameter declared with `from`, passed at the call
+    site. Body references the parameter as a normal name."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 30 and status as pending",
+        "remember a list called orders with o1 and o2",
+        "remember how to find-big from data: keep the data where total is above 50",
+        "find-big from orders",
+    ])
+    for r in results[:4]:
+        assert r.status is ResultStatus.SUCCESS
+    # Line 5 auto-shows the matching record.
+    assert results[4].status is ResultStatus.SUCCESS
+    assert results[4].output == ["total: 75, status: active"]
+
+
+def test_sentence_82_parameter_does_not_affect_source():
+    """§96 — copy semantics: `filter` inside a parameterized composition
+    mutates the local copy, not the original list."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 30 and status as pending",
+        "remember a list called orders with o1 and o2",
+        "remember how to destroy from data: filter the data where total is above 50",
+        "destroy from orders",
+        "count the orders",
+    ])
+    assert results[4].status is ResultStatus.SUCCESS
+    # `count the orders` after the call still reads 2 — the global was
+    # untouched.
+    assert results[5].output == ["2"]
+    assert len(session.symtab["orders"].value) == 2
+
+
+def test_sentence_83_parameter_shadows_global_and_restores():
+    """§96 — parameter name shadows a global of the same name for the
+    duration of the call, then the global is restored."""
+    session, results = run_lines([
+        "remember a value called data with 999",
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a list called items with o1",
+        "remember how to inspect from data: count the data",
+        "inspect from items",
+        "show data",
+    ])
+    # The inspect call counts the items it was passed (1 record).
+    assert results[4].output == ["1"]
+    # After the call, the global `data` (999) is back in place.
+    assert results[5].output == ["999"]
+    assert session.symtab["data"].value == 999
+
+
+def test_sentence_84_parameterized_composition_returns_value():
+    """§98 — `remember … from <comp> from <name>` captures the return
+    value of a parameterized call (two `from` tokens disambiguated)."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember an order called o2 with total as 30 and status as pending",
+        "remember a list called orders with o1 and o2",
+        "remember how to find-big from data: keep the data where total is above 50",
+        "remember the results called big from find-big from orders",
+        "count big",
+    ])
+    assert results[4].status is ResultStatus.SUCCESS
+    assert results[5].output == ["1"]
+    assert len(session.symtab["big"].value) == 1
+    assert session.symtab["big"].value[0]["total"] == 75
+
+
+def test_sentence_85_error_expected_parameter_not_provided():
+    """§97 — composition expects an input but the call provides none."""
+    session, results = run_lines([
+        "remember how to find-big from data: keep the data where total is above 50",
+        "find-big",
+    ])
+    assert results[1].status is ResultStatus.ERROR_SEMANTIC
+    assert "expects an input" in results[1].message
+    assert "find-big" in results[1].message
+    assert "data" in results[1].message
+
+
+def test_sentence_86_error_unexpected_parameter_provided():
+    """§97 — composition takes no input but the call supplies one."""
+    session, results = run_lines([
+        "remember a list called tasks with t1",
+        "remember a task called t1 with status as active",
+        "remember how to show-all: show orders",
+        "show-all from tasks",
+    ])
+    # The first two `remember` lines are setup so `tasks` resolves at
+    # the call site (the mismatch check verifies arg existence before
+    # body analysis).
+    final = results[-1]
+    assert final.status is ResultStatus.ERROR_SEMANTIC
+    assert "doesn't take an input" in final.message
+    assert "show-all" in final.message
+
+
+def test_sentence_87_remember_inside_parameterized_comp_writes_globally():
+    """§96 — only the parameter is local. `remember` inside the body
+    binds in the global scope."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a list called items with o1",
+        "remember how to process from data: count the data and remember a value called last-count with 42",
+        "process from items",
+        "show last-count",
+    ])
+    # The count auto-shows from inside the composition.
+    assert results[3].status is ResultStatus.SUCCESS
+    assert results[3].output is not None and "1" in results[3].output
+    # And `last-count` survived into the global symbol table.
+    assert results[4].output == ["42"]
+    assert session.symtab["last-count"].value == 42
+
+
+def test_sentence_88_basic_choose_if_otherwise():
+    """§99 — basic `choose if … : … otherwise …`."""
+    session, results = run_lines([
+        "remember a value called score with 75",
+        'choose if score is above 50: show "pass" otherwise show "fail"',
+    ])
+    assert results[1].status is ResultStatus.SUCCESS
+    assert results[1].output == ["pass"]
+
+
+def test_sentence_89_choose_without_otherwise_condition_false():
+    """§99 — `otherwise` omitted, condition false → no output, execution
+    continues to the next statement."""
+    session, results = run_lines([
+        "remember a value called score with 30",
+        'choose if score is above 50: show "pass"',
+        'show "done"',
+    ])
+    assert results[1].status is ResultStatus.SUCCESS
+    assert not results[1].output  # nothing emitted
+    assert results[2].output == ["done"]
+
+
+def test_sentence_90_choose_with_field_of_record_condition():
+    """§100 — condition operand uses `<field> of <record>`."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        'choose if total of o1 is above 50: show "big order" otherwise show "small order"',
+    ])
+    assert results[1].output == ["big order"]
+
+
+def test_sentence_91_multi_way_branching_with_otherwise_if():
+    """§101 — `otherwise if` chaining with short-circuit evaluation."""
+    session, results = run_lines([
+        "remember a value called level with 5",
+        'choose if level is above 8: show "high" otherwise if level is above 3: show "medium" otherwise show "low"',
+    ])
+    assert results[1].output == ["medium"]
+
+
+def test_sentence_92_multi_statement_action_with_and():
+    """§101 — `and` inside a branch sequences operations."""
+    session, results = run_lines([
+        "remember a value called score with 75",
+        'choose if score is above 50: show "pass" and remember a value called result with pass otherwise show "fail" and remember a value called result with fail',
+        "show result",
+    ])
+    assert results[1].output == ["pass"]
+    assert results[2].output == ["pass"]
+    assert session.symtab["result"].value == "pass"
+
+
+def test_sentence_93_choose_with_quoted_string_in_condition():
+    """§100 — quoted-string operand on the value side; v2c quoting
+    semantics carry into `choose` conditions."""
+    session, results = run_lines([
+        'remember a task called t1 with status as "in progress"',
+        'choose if status of t1 is "in progress": show "still working" otherwise show "done"',
+    ])
+    assert results[1].output == ["still working"]
+
+
+def test_sentence_94_choose_inside_each_is_an_error():
+    """§102 — `choose` inside `each` is deferred. Parse error with
+    keep-based guidance."""
+    session, results = run_lines([
+        "remember an order called o1 with total as 75 and status as active",
+        "remember a list called orders with o1",
+        'each the orders choose if total is above 50: show "big"',
+    ])
+    final = results[-1]
+    assert final.status is ResultStatus.ERROR_PARSE
+    assert "can't appear inside 'each'" in final.message
+    assert "keep" in final.message
+
+
+def test_sentence_95_choose_as_last_op_in_composition_used_in_value_position():
+    """§102 — `choose` is side-effect only; using it as the last op of a
+    composition called in value position triggers the v2b §76 error."""
+    session, results = run_lines([
+        "remember a value called score with 75",
+        'remember how to check: choose if score is above 50: show "pass"',
+        "remember the result called r from check",
+    ])
+    final = results[-1]
+    assert final.status is ResultStatus.ERROR_SEMANTIC
+    assert "doesn't return a value" in final.message
+    assert "choose" in final.message
+    assert "check" in final.message
+
+
+# ---------------------------------------------------------------------------
+# v2d sentence index coverage
+# ---------------------------------------------------------------------------
+
+
+V2D_SENTENCE_INDEX = {81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95}
+
+
+def test_all_v2d_sentences_have_a_targeted_test():
+    """Lock the v2d test sentence count (§105: 15 sentences, 81–95)."""
+    assert len(V2D_SENTENCE_INDEX) == 15

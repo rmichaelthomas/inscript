@@ -264,6 +264,41 @@ ROUND_TRIP_SENTENCES = [
     ("filter nums where each is above 3 and show missingname", None),
     # Single-item list (v1d sentence 38)
     ("remember a list called orders with order1", None),
+    # v2d §96/§98 — composition parameters
+    (
+        "remember how to find-big from data: keep the data where total is above 50",
+        None,
+    ),
+    ("find-big from orders", {"find-big"}),
+    (
+        "remember the results called big from find-big from orders",
+        {"find-big"},
+    ),
+    # v2d §99/§101 — choose. Single-word literal strings can't round-trip
+    # through `show <target>` because v2c §90's conditional quoting drops
+    # them and re-parsing reads them as NameRefs. Use multi-word literals
+    # in these cases so quoting survives the round-trip.
+    ('choose if score is above 50: show "big order"', None),
+    (
+        'choose if score is above 50: show "big order" otherwise show "small order"',
+        None,
+    ),
+    (
+        'choose if level is above 8: show "very high" '
+        'otherwise if level is above 3: show "medium range" '
+        'otherwise show "very low"',
+        None,
+    ),
+    # Multi-statement actions with multi-word literals.
+    (
+        'choose if score is above 50: show "big order" and '
+        'count the orders '
+        'otherwise show "small order" and '
+        'count the orders',
+        None,
+    ),
+    # `of` on the left side of a condition (v2d §100)
+    ('choose if total of o1 is above 50: show "big order"', None),
 ]
 
 

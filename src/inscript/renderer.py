@@ -21,6 +21,8 @@ from __future__ import annotations
 from .parser import (
     ASTNode,
     BareWord,
+    ChooseBranch,
+    ChooseNode,
     CombineNode,
     CompositionCallNode,
     CompoundConditionNode,
@@ -91,6 +93,13 @@ def render(node: ASTNode) -> str:
         art = _article_for(desc)
         return f"remember {art} {desc} called {node.name} with {fields}"
     if isinstance(node, RememberCompositionNode):
+        # v2d §96: emit `from <param>` between the composition name and
+        # the colon when the definition declared a parameter.
+        if node.param is not None:
+            return (
+                f"remember how to {node.name} from {node.param}: "
+                f"{render(node.body)}"
+            )
         return f"remember how to {node.name}: {render(node.body)}"
 
     if isinstance(node, ShowNode):
@@ -123,7 +132,12 @@ def render(node: ASTNode) -> str:
         return f"each the {render(node.collection)} {render(node.action)}"
 
     if isinstance(node, CompositionCallNode):
+        # v2d §96: parameter-passing call form.
+        if node.arg is not None:
+            return f"{node.name} from {node.arg}"
         return node.name
+    if isinstance(node, ChooseNode):
+        return _render_choose(node)
     if isinstance(node, SequenceNode):
         return " and ".join(render(op) for op in node.operations)
 
@@ -170,7 +184,30 @@ def render_with_explicit_precedence(node: ASTNode) -> str:
     if isinstance(node, SequenceNode):
         return " and ".join(render_with_explicit_precedence(op) for op in node.operations)
     if isinstance(node, RememberCompositionNode):
+        if node.param is not None:
+            return (
+                f"remember how to {node.name} from {node.param}: "
+                f"{render_with_explicit_precedence(node.body)}"
+            )
         return f"remember how to {node.name}: {render_with_explicit_precedence(node.body)}"
+    if isinstance(node, ChooseNode):
+        parts: list[str] = []
+        for i, br in enumerate(node.branches):
+            if i == 0:
+                parts.append(
+                    f"choose if {render_with_explicit_precedence(br.condition)}: "
+                    f"{render_with_explicit_precedence(br.action)}"
+                )
+            elif br.condition is not None:
+                parts.append(
+                    f"otherwise if {render_with_explicit_precedence(br.condition)}: "
+                    f"{render_with_explicit_precedence(br.action)}"
+                )
+            else:
+                parts.append(
+                    f"otherwise {render_with_explicit_precedence(br.action)}"
+                )
+        return " ".join(parts)
     return render(node)
 
 
@@ -189,6 +226,25 @@ _OP_WORDS = {
     "below": "below",
     "equal_to": "equal to",
 }
+
+
+def _render_choose(node: ChooseNode) -> str:
+    """v2d §99/§101 — canonical form:
+        choose if <c1>: <a1> [otherwise if <c2>: <a2>]... [otherwise <aN>]
+
+    The first branch always carries an `if` (consumed by the verb). Each
+    subsequent branch begins with `otherwise`; a branch with a condition
+    adds `if <c>:`; a terminal branch (condition=None) is just `<action>`.
+    """
+    parts: list[str] = []
+    for i, br in enumerate(node.branches):
+        if i == 0:
+            parts.append(f"choose if {render(br.condition)}: {render(br.action)}")
+        elif br.condition is not None:
+            parts.append(f"otherwise if {render(br.condition)}: {render(br.action)}")
+        else:
+            parts.append(f"otherwise {render(br.action)}")
+    return " ".join(parts)
 
 
 def _render_condition(node: ConditionNode) -> str:

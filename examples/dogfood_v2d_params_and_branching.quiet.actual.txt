@@ -1,0 +1,29 @@
+=== v2d: parameterized composition reused on two lists ===
+total: 75, status: active
+total: 200, status: active
+
+
+
+=== v2d: value capture from parameterized composition (two from) ===
+2
+
+=== v2d: choose if/otherwise over a scalar ===
+passing
+
+=== v2d: multi-way branching with otherwise if ===
+medium range
+
+=== v2d: choose inside a composition (side effect only) ===
+standard
+small
+premium
+
+=== v2d: multi-statement action via and inside a branch ===
+qualified
+gold
+
+=== v2d: compound condition with and ===
+active big order
+
+=== v2d: compound condition with or ===
+either-or matched

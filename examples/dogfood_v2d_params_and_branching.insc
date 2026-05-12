@@ -1,0 +1,40 @@
+show "=== v2d: parameterized composition reused on two lists ==="
+remember an order called o1 with total as 75 and status as active
+remember an order called o2 with total as 30 and status as pending
+remember an order called o3 with total as 200 and status as active
+remember a list called orders with o1 and o2 and o3
+remember how to find-big from data: keep the data where total is above 50
+find-big from orders
+
+remember an order called o4 with total as 10 and status as active
+remember a list called small-orders with o2 and o4
+find-big from small-orders
+
+show "=== v2d: value capture from parameterized composition (two from) ==="
+remember the heavy called heavy from find-big from orders
+count heavy
+
+show "=== v2d: choose if/otherwise over a scalar ==="
+remember a value called score with 75
+choose if score is above 50: show "passing" otherwise show "failing"
+
+show "=== v2d: multi-way branching with otherwise if ==="
+remember a value called level with 5
+choose if level is above 8: show "high range" otherwise if level is above 3: show "medium range" otherwise show "low range"
+
+show "=== v2d: choose inside a composition (side effect only) ==="
+remember how to classify from order: choose if total of order is above 100: show "premium" otherwise if total of order is above 50: show "standard" otherwise show "small"
+classify from o1
+classify from o2
+classify from o3
+
+show "=== v2d: multi-statement action via and inside a branch ==="
+remember a value called points with 80
+choose if points is above 50: show "qualified" and remember a value called tier with gold otherwise show "not qualified" and remember a value called tier with bronze
+show tier
+
+show "=== v2d: compound condition with and ==="
+choose if total of o1 is above 50 and status of o1 is active: show "active big order"
+
+show "=== v2d: compound condition with or ==="
+choose if total of o2 is above 100 or status of o2 is pending: show "either-or matched"

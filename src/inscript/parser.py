@@ -116,6 +116,11 @@ class RememberRecordNode(ASTNode):
 class RememberCompositionNode(ASTNode):
     name: str
     body: ASTNode
+    # v2d §96 — optional single named parameter. None when the composition
+    # was defined without a `from <param>` clause (the v1/v2a/v2b/v2c shape).
+    # The parameter name follows v1's name rules (UNKNOWN token, reserved-
+    # word exclusion via _consume_name).
+    param: str | None = None
 
 
 @dataclass
@@ -197,6 +202,11 @@ class EachNode(ASTNode):
 @dataclass
 class CompositionCallNode(ASTNode):
     name: str
+    # v2d §96 — optional parameter-passing argument. None when the call
+    # provided no `from <name>` clause. The argument is always a name
+    # reference (names-only per §96); literal values are rejected at
+    # parse time.
+    arg: str | None = None
 
 
 @dataclass
@@ -216,6 +226,29 @@ class CompoundConditionNode(ASTNode):
     left: ASTNode
     right: ASTNode
     connector: str               # "and" or "or"
+
+
+@dataclass
+class ChooseBranch:
+    """v2d §99–§101 — one (condition, action) pair inside a `choose`.
+
+    A terminal `otherwise <action>` branch has `condition=None`. Branches
+    are evaluated in order; the first whose condition is true fires (or,
+    for the terminal branch, fires unconditionally as a fallback).
+    """
+    condition: ASTNode | None
+    action: ASTNode
+
+
+@dataclass
+class ChooseNode(ASTNode):
+    """v2d §99 — conditional branching verb.
+
+    `branches` lists each branch in source order. The last branch may
+    have `condition=None` (terminal `otherwise`). A bare `choose if X: A`
+    is represented as a single-branch list with no terminal.
+    """
+    branches: list[ChooseBranch]
 
 
 # Set of operator words that may follow `is` as a comparison introducer.
@@ -359,21 +392,19 @@ def _parse_one_operation(stream: TokenStream, comp: set[str]) -> ASTNode:
         # v1b §41 fallback: named composition call.
         if t.value in comp:
             stream.consume()
-            # Composition chaining (`<name> from <name>`) is deferred to v2
-            # alongside composition parameters (v1b §41, Q9). v2a §70: detect
-            # this case and emit the specific deferral message rather than
-            # the generic "I didn't expect 'from' here."
+            # v2d §96: `<comp-name> from <name>` at top-level is parameter
+            # passing. This supersedes the v2a §70 composition-chaining
+            # error — the from-after-comp shape is now resolved syntax.
             after = stream.peek()
             if after and after.type is TokenType.CONNECTIVE and after.value == "from":
-                raise _ParseError(
-                    f"Composition chaining isn't supported yet. "
-                    f"Call '{t.value}' on its own line."
-                )
+                stream.consume()  # eat `from`
+                arg = _consume_parameter_arg(stream, comp_name=t.value)
+                return CompositionCallNode(name=t.value, arg=arg)
             return CompositionCallNode(name=t.value)
         raise _ParseError(
             "I don't recognize a command here. Every sentence needs a verb "
             "like 'remember', 'show', 'filter', 'count', 'gather', "
-            "'combine', or 'each'."
+            "'combine', 'each', or 'choose'."
         )
     raise _ParseError(f"I didn't expect '{t.value}' at the start of an operation.")
 
@@ -398,6 +429,15 @@ def _parse_verb_statement(stream: TokenStream, comp: set[str]) -> ASTNode:
         return _parse_combine(stream)
     if verb.value == "each":
         return _parse_each(stream, comp)
+    if verb.value == "choose":
+        # v2d §102 — `choose` inside `each` is deferred. Reject at parse
+        # time with the spec-mandated wording (sentence 94 / Outcome 4).
+        if stream.in_clause("each"):
+            raise _ParseError(
+                "'choose' can't appear inside 'each'. To handle items "
+                "differently, use 'keep' to separate them by condition."
+            )
+        return _parse_choose(stream, comp)
     raise _ParseError(f"Unknown verb '{verb.value}'.")
 
 
@@ -448,12 +488,22 @@ def _parse_composition_definition(stream: TokenStream, comp: set[str]) -> Rememb
 
     name = _consume_name(stream, after="'how to'")
 
+    # v2d §96 — optional `from <param-name>` between the composition name
+    # and the colon. Reserved-word exclusion (v1a §29) is enforced via
+    # _consume_name. Single parameter only; a second `from` (or any
+    # token between the parameter and the colon) is a parse error.
+    param: str | None = None
+    peek = stream.peek()
+    if peek and peek.type is TokenType.CONNECTIVE and peek.value == "from":
+        stream.consume()  # eat `from`
+        param = _consume_name(stream, after=f"'from' in composition '{name}'")
+
     colon = stream.consume()
     if not (colon and colon.type is TokenType.DELIMITER and colon.value == ":"):
         raise _ParseError("I expected ':' after the composition name.")
 
     body = _parse_operation_sequence(stream, comp)
-    return RememberCompositionNode(name=name, body=body)
+    return RememberCompositionNode(name=name, body=body, param=param)
 
 
 def _consume_remember_intro(stream: TokenStream) -> tuple[str | None, bool]:
@@ -608,6 +658,21 @@ def _parse_remember_from(
         # Could be a composition call (v1b §41 fallback inside the from-expr).
         if peek.value in comp:
             stream.consume()
+            # v2d §98 — peek-ahead for parameterized call in value-capture
+            # position. `remember the r called r from find-big from orders`
+            # has two `from` tokens: the outer is value capture, the inner
+            # is parameter passing. Since parameters are names-only (§96),
+            # `from UNKNOWN` after a known composition is always param-
+            # passing.
+            after = stream.peek()
+            if after and after.type is TokenType.CONNECTIVE and after.value == "from":
+                stream.consume()  # eat inner `from`
+                arg = _consume_parameter_arg(stream, comp_name=peek.value)
+                return RememberValueNode(
+                    name=name,
+                    value=CompositionCallNode(name=peek.value, arg=arg),
+                    descriptor=descriptor,
+                )
             return RememberValueNode(
                 name=name,
                 value=CompositionCallNode(name=peek.value),
@@ -847,6 +912,73 @@ def _parse_each(stream: TokenStream, comp: set[str]) -> EachNode:
 
 
 # ---------------------------------------------------------------------------
+# choose (v2d §99–§102)
+# ---------------------------------------------------------------------------
+
+
+def _parse_choose(stream: TokenStream, comp: set[str]) -> ChooseNode:
+    """Parse `choose if <cond>: <action> [otherwise [if <cond>:] <action>]*`.
+
+    The colon is the context switch between condition mode and action
+    mode (§101). Conditions reuse the where-clause condition path
+    (`_parse_or_condition`) so `and`/`or` compose as in `where` — they
+    terminate at `:`. Actions reuse `_parse_operation_sequence` so `and
+    <verb>` sequences operations within a branch — it terminates at
+    `otherwise` and at end of input.
+    """
+    if_tok = stream.consume()
+    if not (if_tok and if_tok.type is TokenType.CONNECTIVE and if_tok.value == "if"):
+        raise _ParseError(
+            "I expected 'if' after 'choose'. "
+            "Try: choose if <condition>: <action>."
+        )
+    branches: list[ChooseBranch] = [
+        _parse_choose_branch(stream, comp, leader="'choose if'")
+    ]
+    while True:
+        peek = stream.peek()
+        if not (peek and peek.type is TokenType.CONNECTIVE and peek.value == "otherwise"):
+            break
+        stream.consume()  # eat `otherwise`
+        peek2 = stream.peek()
+        if peek2 and peek2.type is TokenType.CONNECTIVE and peek2.value == "if":
+            stream.consume()  # eat the chained `if`
+            branches.append(
+                _parse_choose_branch(stream, comp, leader="'otherwise if'")
+            )
+        else:
+            # Terminal `otherwise <action>` — no condition, no colon (§99).
+            action = _parse_operation_sequence(stream, comp)
+            branches.append(ChooseBranch(condition=None, action=action))
+            # No further branches are syntactically allowed after the
+            # terminal otherwise — additional tokens are left for the
+            # outer parser, which surfaces them as unexpected.
+            break
+    return ChooseNode(branches=branches)
+
+
+def _parse_choose_branch(
+    stream: TokenStream, comp: set[str], *, leader: str,
+) -> ChooseBranch:
+    """Parse `<condition>: <action>` for a single `choose` branch. The
+    `leader` argument feeds the error message so the user sees whether
+    they were inside the initial `choose if` or a chained `otherwise if`."""
+    stream.push_clause("choose_cond")
+    try:
+        condition = _parse_or_condition(stream)
+    finally:
+        stream.pop_clause()
+    colon = stream.consume()
+    if not (colon and colon.type is TokenType.DELIMITER and colon.value == ":"):
+        got = colon.value if colon else "end of line"
+        raise _ParseError(
+            f"I expected ':' after the {leader} condition, not '{got}'."
+        )
+    action = _parse_operation_sequence(stream, comp)
+    return ChooseBranch(condition=condition, action=action)
+
+
+# ---------------------------------------------------------------------------
 # filter + where conditions
 # ---------------------------------------------------------------------------
 
@@ -921,7 +1053,41 @@ def _parse_simple_condition(stream: TokenStream) -> ConditionNode:
     if head.type is TokenType.VERB and head.value == "each":
         field_node: ASTNode = EachPronoun()
     elif head.type is TokenType.UNKNOWN:
-        field_node = NameRef(name=head.value)
+        # v2b §77 / v2d §100: support `<field> of <record>` on the left
+        # side of a comparison. `where`/`keep` conditions normally read
+        # the field off the iterator item, but `choose` has no iterator —
+        # users must point to a record explicitly with `of`. Allowing it
+        # uniformly here is a strict additive change (previously a
+        # parse error), and the analyzer applies the same field-access
+        # checks regardless of clause context.
+        after = stream.peek()
+        if after and after.type is TokenType.CONNECTIVE and after.value == "of":
+            stream.consume()  # eat `of`
+            rec_tok = stream.consume()
+            if rec_tok is None:
+                raise _ParseError("I expected a record name after 'of'.")
+            if rec_tok.type is not TokenType.UNKNOWN:
+                rcat = reserved_category(rec_tok.value)
+                if rcat:
+                    raise _ParseError(
+                        f"The word '{rec_tok.value}' is reserved in "
+                        f"Inscript — it's used as a {rcat} and can't be "
+                        f"used as a record name."
+                    )
+                raise _ParseError(
+                    f"I expected a record name after 'of', not "
+                    f"'{rec_tok.value}'."
+                )
+            chain = stream.peek()
+            if chain and chain.type is TokenType.CONNECTIVE and chain.value == "of":
+                raise _ParseError(
+                    "Field access uses one record at a time: "
+                    "<field> of <record>. Chained forms (a of b of c) "
+                    "need nested records, which v2b doesn't yet have."
+                )
+            field_node = FieldAccessNode(field=head.value, record_name=rec_tok.value)
+        else:
+            field_node = NameRef(name=head.value)
     elif head.type is TokenType.QUOTED_STRING:
         # v2c §87 — field names can't have spaces.
         raise _ParseError(
@@ -1110,6 +1276,36 @@ def _consume_target(stream: TokenStream, *, verb: str) -> NameRef:
     return NameRef(name=tok.value)
 
 
+def _consume_parameter_arg(stream: TokenStream, *, comp_name: str) -> str:
+    """v2d §96 — consume the name token that follows `<comp> from` at a
+    call site. Names-only: NUMBER / QUOTED_STRING / reserved words are
+    rejected here at parse time. The actual symbol lookup happens at run
+    time, consistent with v1's name-resolution timing (inception §23).
+    """
+    tok = stream.consume()
+    if tok is None:
+        raise _ParseError(
+            f"I expected a name after '{comp_name} from' — "
+            f"compositions take a single name as input."
+        )
+    if tok.type is TokenType.QUOTED_STRING:
+        raise _ParseError(
+            f"Names can't have spaces. Try a hyphenated name like "
+            f"'{_hyphenate(tok.value)}' instead."
+        )
+    if tok.type is not TokenType.UNKNOWN:
+        cat = reserved_category(tok.value)
+        if cat:
+            raise _ParseError(
+                f"The word '{tok.value}' is reserved in Inscript — "
+                f"it's used as a {cat}. Please use a name you've created."
+            )
+        raise _ParseError(
+            f"I expected a name after '{comp_name} from', not '{tok.value}'."
+        )
+    return tok.value
+
+
 def _consume_name(stream: TokenStream, *, after: str) -> str:
     tok = stream.consume()
     if tok is None:
@@ -1151,6 +1347,17 @@ def _contains_mixed_precedence(node: ASTNode) -> bool:
         return _contains_mixed_precedence(node.body)
     if isinstance(node, RememberValueNode) and isinstance(node.value, ASTNode):
         return _contains_mixed_precedence(node.value)
+    if isinstance(node, ChooseNode):
+        # v2d §100 / §101: amber applies to `choose` conditions on the
+        # same grounds as `where` clauses (v1a §30). Each branch's
+        # condition tree (where present) is independently checked; the
+        # branch action may itself be a SequenceNode containing a
+        # filter/keep, so recurse into it too.
+        for br in node.branches:
+            if br.condition is not None and _condition_is_mixed(br.condition):
+                return True
+            if _contains_mixed_precedence(br.action):
+                return True
     return False
 
 

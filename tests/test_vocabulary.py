@@ -17,20 +17,23 @@ from inscript.vocabulary import (
 
 
 def test_verb_count():
-    # v2a §73: 8 verbs (was 7 in v1; `keep` added in v2a §67).
-    assert len(VERBS) == 8
+    # v2d §104: 9 verbs (was 8 in v2a §73; `choose` promoted from the
+    # v2-deferred table to an active verb in v2d §99).
+    assert len(VERBS) == 9
     assert VERBS == {
         "remember", "show", "filter", "keep", "count",
-        "gather", "combine", "each",
+        "gather", "combine", "each", "choose",
     }
 
 
 def test_connective_count():
-    # v2a §73: 10 connectives (was 9 in v1; `of` added in v2a §68).
-    assert len(CONNECTIVES) == 10
+    # v2d §104: 12 connectives (was 10 in v2a §73; `if` and `otherwise`
+    # added in v2d §99 for `choose if … : … otherwise …`).
+    assert len(CONNECTIVES) == 12
     assert CONNECTIVES == {
         "where", "and", "or", "from", "with",
         "called", "to", "how", "as", "of",
+        "if", "otherwise",
     }
 
 
@@ -51,20 +54,24 @@ def test_delimiter_count():
 
 
 def test_v2_reserved():
-    assert len(V2_RESERVED) == 5
-    assert V2_RESERVED == {"transform", "choose", "compare", "when", "unless"}
+    # v2d §104: 4 deferred words (was 5 in v2a §73). `choose` was
+    # promoted to an active verb in v2d §99; `transform`, `compare`,
+    # `when`, and `unless` remain deferred per v2d §103.
+    assert len(V2_RESERVED) == 4
+    assert V2_RESERVED == {"transform", "compare", "when", "unless"}
 
 
 def test_multi_word_reserved():
     assert MULTI_WORD_RESERVED == {"equal"}
 
 
-def test_total_reserved_count_is_31():
-    # v2a §73: 31 reserved words total (was 29 in v1c §47; +1 for `keep`
-    # in §67, +1 for `of` in §68).
-    # 8 verbs + 10 connectives + 4 operators + 1 multi-word + 3 articles
-    # + 3 v2 verbs + 2 v2 connectives = 31.
-    assert len(ALL_RESERVED) == 31
+def test_total_reserved_count_is_33():
+    # v2d §104: 33 reserved words total (was 31 in v2a §73).
+    # Delta: +1 `choose` promoted from deferred to verb (net +0 across
+    # VERBS + V2_RESERVED), +2 connectives (`if`, `otherwise`).
+    # 9 verbs + 12 connectives + 4 operators + 1 multi-word + 3 articles
+    # + 2 v2-deferred verbs + 2 v2-deferred connectives = 33.
+    assert len(ALL_RESERVED) == 33
 
 
 def test_reserved_sets_are_disjoint():
@@ -100,7 +107,7 @@ def test_verb_signatures_cover_all_verbs():
 
 
 def test_verb_signature_slot_shapes():
-    # Sanity-check slot lists from inception §17, refined per v1b/v1d/v2a.
+    # Sanity-check slot lists from inception §17, refined per v1b/v1d/v2a/v2d.
     assert VERB_SIGNATURES["show"] == ["target"]
     assert VERB_SIGNATURES["count"] == ["target"]
     assert VERB_SIGNATURES["combine"] == ["target"]
@@ -110,6 +117,10 @@ def test_verb_signature_slot_shapes():
     assert VERB_SIGNATURES["gather"] == ["name", "from", "to"]
     assert VERB_SIGNATURES["each"] == ["collection", "action"]
     assert VERB_SIGNATURES["remember"] == ["name", "value"]
+    # v2d §99: choose has three slots (alternative optional at use sites).
+    assert VERB_SIGNATURES["choose"] == [
+        "condition", "consequence", "alternative",
+    ]
 
 
 def test_token_type_enum_members():

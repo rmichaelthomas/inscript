@@ -29,6 +29,8 @@ from typing import Any
 from .parser import (
     ASTNode,
     BareWord,
+    ChooseBranch,
+    ChooseNode,
     CombineNode,
     CompositionCallNode,
     CompoundConditionNode,
@@ -74,6 +76,11 @@ class SymbolEntry:
     # (literal values, captured from `keep`/`filter`); the analyzer falls
     # back to a positional identifier in that case.
     source_names: list[str | None] | None = None
+    # v2d §96: for compositions, the name of the single declared
+    # parameter (or None if the composition takes no input). Populated
+    # at definition time so the call-site mismatch check (§97) can
+    # determine whether an arg was expected.
+    composition_param: str | None = None
 
 
 # Recognized type strings.
@@ -180,6 +187,13 @@ def _check(
         _check_combine(node, symtab)
     elif isinstance(node, EachNode):
         _check_each(node, symtab)
+    elif isinstance(node, ChooseNode):
+        # v2d §99–§102 — branch-by-branch validation with no iterator
+        # context (choose has no iterator). Nested control flow inside
+        # branches inherits the caller's iterator if any (e.g. choose
+        # inside an each body is rejected at parse time, so this is
+        # the no-iterator path in practice).
+        _check_choose(node, symtab, iterator)
     elif isinstance(node, CompositionCallNode):
         _check_composition_call(node, symtab)
     elif isinstance(node, SequenceNode):
@@ -220,20 +234,11 @@ def _check_value_expr(
         _check_field_access(value_node, symtab)
         return
     if isinstance(value_node, CompositionCallNode):
-        # v2b §76 — composition call in value position. Validate the
-        # composition resolves, analyze its body, then verify the body's
-        # last operation produces a value. The void-result error fires
-        # here at analyze time (before exec) so that side effects of the
-        # body don't run.
-        if (
-            value_node.name not in symtab
-            or symtab[value_node.name].type != "composition"
-        ):
-            raise _SemanticError(
-                f"I can't find a composition called '{value_node.name}'."
-            )
-        body = symtab[value_node.name].value
-        _check(body, symtab, iterator=None)
+        # v2b §76 — composition call in value position. v2d §97 extends
+        # this with parameter-mismatch checks at the call site, before
+        # body analysis runs.
+        _check_composition_call_shape(value_node, symtab)
+        _analyze_composition_body(value_node, symtab)
         verb = _composition_void_result_verb(value_node.name, symtab)
         if verb is not None:
             raise _SemanticError(
@@ -270,13 +275,18 @@ def _side_effect_verb(
     visited: set[str],
 ) -> str | None:
     """Return the verb name if this AST node is side-effect-only at
-    value position; None if it produces a value (v2b §76 table)."""
+    value position; None if it produces a value (v2b §76 + v2d §102
+    extended table)."""
     if isinstance(node, ShowNode):
         return "show"
     if isinstance(node, FilterNode):
         return "filter"
     if isinstance(node, EachNode):
         return "each"
+    if isinstance(node, ChooseNode):
+        # v2d §102 — `choose` evaluates a condition and runs a branch
+        # for its side effects; it does not produce a value.
+        return "choose"
     if isinstance(node, (RememberListNode, RememberRecordNode, RememberCompositionNode)):
         return "remember"
     if isinstance(node, RememberValueNode):
@@ -720,11 +730,152 @@ def _check_composition_call(
     node: CompositionCallNode,
     symtab: dict[str, SymbolEntry],
 ) -> None:
+    _check_composition_call_shape(node, symtab)
+    _analyze_composition_body(node, symtab)
+
+
+def _check_composition_call_shape(
+    node: CompositionCallNode,
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    """v2d §97 — verify the call shape matches the composition's
+    signature: a parameter must be supplied iff the composition declared
+    one. Existence/type checks come first so the user sees the most
+    informative error.
+    """
     if node.name not in symtab or symtab[node.name].type != "composition":
         raise _SemanticError(f"I can't find a composition called '{node.name}'.")
-    body = symtab[node.name].value
-    # §23: name resolution at call time. Analyze the body now.
-    _check(body, symtab, iterator=None)
+    entry = symtab[node.name]
+    param = entry.composition_param
+
+    if param is not None and node.arg is None:
+        raise _SemanticError(
+            f"'{node.name}' expects an input (from <{param}>). "
+            f"Try: {node.name} from <your-list>."
+        )
+    if param is None and node.arg is not None:
+        raise _SemanticError(
+            f"'{node.name}' doesn't take an input. "
+            f"Call it on its own: {node.name}."
+        )
+    if node.arg is not None and node.arg not in symtab:
+        raise _SemanticError(
+            f"I can't find '{node.arg}'. "
+            f"You might need to 'remember' it first."
+        )
+
+
+def _analyze_composition_body(
+    node: CompositionCallNode,
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    """Analyze the composition body with the parameter temporarily bound
+    to the passed argument's entry (v2d §96). Restore the prior binding
+    (if any) on exit so the analyzer leaves the symbol table as it found
+    it. Mirrors the runtime save/bind/exec/restore shape (interpreter),
+    so a body that references `data` resolves the same way at analyze
+    time as it will at execution time.
+    """
+    entry = symtab[node.name]
+    body = entry.value
+    param = entry.composition_param
+    if param is None or node.arg is None:
+        _check(body, symtab, iterator=None)
+        return
+    original = symtab.get(param)
+    symtab[param] = symtab[node.arg]  # alias for analysis only
+    try:
+        _check(body, symtab, iterator=None)
+    finally:
+        if original is None:
+            symtab.pop(param, None)
+        else:
+            symtab[param] = original
+
+
+# ---------------------------------------------------------------------------
+# choose (v2d §99–§102)
+# ---------------------------------------------------------------------------
+
+
+def _check_choose(
+    node: ChooseNode,
+    symtab: dict[str, SymbolEntry],
+    iterator: IteratorContext | None,
+) -> None:
+    """Validate each branch's condition + action. Conditions use the
+    choose-specific operand resolver (no iterator context per §100);
+    actions are analyzed against whatever iterator the surrounding scope
+    provides (None at top level — choose-inside-each is rejected at
+    parse time per §102)."""
+    for br in node.branches:
+        if br.condition is not None:
+            _check_choose_condition(br.condition, symtab)
+        _check(br.action, symtab, iterator)
+
+
+def _check_choose_condition(
+    cond: ASTNode,
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    if isinstance(cond, CompoundConditionNode):
+        _check_choose_condition(cond.left, symtab)
+        _check_choose_condition(cond.right, symtab)
+        return
+    if not isinstance(cond, ConditionNode):
+        raise _SemanticError("Unexpected condition shape.")
+    field_type, field_label = _resolve_choose_operand(cond.field, symtab)
+    value_type, value_label = _resolve_choose_operand(cond.value, symtab)
+    if cond.op in ("is", "equal_to"):
+        return
+    if cond.op in ("above", "below"):
+        _require_numeric(field_type, field_label, cond.op)
+        _require_numeric(value_type, value_label, cond.op)
+        return
+    if cond.op.startswith("not_"):
+        inner = cond.op[len("not_"):]
+        if inner in ("above", "below"):
+            _require_numeric(field_type, field_label, f"not {inner}")
+            _require_numeric(value_type, value_label, f"not {inner}")
+        return
+    raise _SemanticError(f"Unknown comparison operator '{cond.op}'.")
+
+
+def _resolve_choose_operand(
+    node: ASTNode,
+    symtab: dict[str, SymbolEntry],
+) -> tuple[str, str]:
+    """Resolve a condition operand inside `choose if`. No iterator
+    context — names resolve directly against the symbol table; field
+    access uses `<field> of <record>` explicitly (§100)."""
+    if isinstance(node, NumberLiteral):
+        return "number", _fmt_number(node.value)
+    if isinstance(node, BareWord):
+        if node.word in symtab:
+            return symtab[node.word].type, node.word
+        return "string", node.word
+    if isinstance(node, QuotedString):
+        return "string", node.content
+    if isinstance(node, NameRef):
+        if node.name not in symtab:
+            raise _SemanticError(
+                f"I can't find '{node.name}'. "
+                f"You might need to 'remember' it first."
+            )
+        return symtab[node.name].type, node.name
+    if isinstance(node, FieldAccessNode):
+        _check_field_access(node, symtab)
+        entry = symtab[node.record_name]
+        return (
+            entry.schema[node.field],
+            f"{node.field} of {node.record_name}",
+        )
+    if isinstance(node, EachPronoun):
+        raise _SemanticError(
+            "'each' only refers to the current item inside an 'each' or "
+            "'where' clause. In 'choose', name the value directly."
+        )
+    raise _SemanticError("Unexpected operand in 'choose' condition.")
 
 
 # ---------------------------------------------------------------------------

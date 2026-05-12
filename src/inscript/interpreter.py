@@ -33,6 +33,8 @@ from .analyzer import SymbolEntry, analyze
 from .parser import (
     ASTNode,
     BareWord,
+    ChooseBranch,
+    ChooseNode,
     CombineNode,
     CompositionCallNode,
     CompoundConditionNode,
@@ -226,6 +228,15 @@ def _exec_op(
         return _exec_combine(node, symtab)
     if isinstance(node, EachNode):
         return _exec_each(node, symtab)
+    if isinstance(node, ChooseNode):
+        # v2d §99–§101 — first matching branch fires; later branches and
+        # actions are not evaluated. Pass `current_item` through so that
+        # a `choose` reached as an inner step of a multi-statement action
+        # within `each` still has the iterator (parse-time forbids
+        # `each ... choose` at the top of an `each` body, but the action
+        # *of a choose branch* may legitimately be invoked while a
+        # `current_item` is in scope for the surrounding caller).
+        return _exec_choose(node, symtab, current_item)
     if isinstance(node, CompositionCallNode):
         return _exec_composition_call(node, symtab)
     if isinstance(node, SequenceNode):
@@ -313,6 +324,10 @@ def _exec_remember_composition(
         name=node.name,
         value=node.body,
         type="composition",
+        # v2d §96: preserve the declared parameter name so the §97
+        # mismatch check and the §96 save/bind/exec/restore at call
+        # time have the metadata they need.
+        composition_param=node.param,
     )
     return []
 
@@ -421,6 +436,27 @@ def _exec_each(node: EachNode, symtab: dict[str, SymbolEntry]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# choose (v2d §99–§101)
+# ---------------------------------------------------------------------------
+
+
+def _exec_choose(
+    node: ChooseNode,
+    symtab: dict[str, SymbolEntry],
+    current_item: Any,
+) -> list[str]:
+    """Evaluate branches in order, firing the first whose condition is
+    true (or the terminal `otherwise` branch if no condition matches).
+    Short-circuits per §101 — later branches do not evaluate."""
+    for br in node.branches:
+        if br.condition is None:
+            return _exec_op(br.action, symtab, current_item) or []
+        if _eval_condition(br.condition, current_item, symtab):
+            return _exec_op(br.action, symtab, current_item) or []
+    return []
+
+
+# ---------------------------------------------------------------------------
 # composition call — body executes against current symbol table (v1b §41)
 # ---------------------------------------------------------------------------
 
@@ -429,21 +465,74 @@ def _exec_composition_call(
     node: CompositionCallNode,
     symtab: dict[str, SymbolEntry],
 ) -> list[str]:
-    body = symtab[node.name].value
-    if isinstance(body, SequenceNode):
-        outputs: list[str] = []
-        for op in body.operations:
-            analysis = analyze(op, symtab)
-            if isinstance(analysis, InscriptResult):
-                raise _RuntimeError(analysis.message or "")
-            out = _exec_op(op, symtab)
-            if out:
-                outputs.extend(out)
-        return outputs
-    analysis = analyze(body, symtab)
-    if isinstance(analysis, InscriptResult):
-        raise _RuntimeError(analysis.message or "")
-    return _exec_op(body, symtab) or []
+    """Execute a composition call. v2d §96 binds the parameter (if any)
+    to a deep copy of the passed argument for the duration of the body,
+    then restores any shadowed global. The analyzer has already verified
+    call-site shape (§97), so the binding has well-defined inputs."""
+    snapshot = _bind_parameter(node, symtab)
+    try:
+        body = symtab[node.name].value
+        if isinstance(body, SequenceNode):
+            outputs: list[str] = []
+            for op in body.operations:
+                analysis = analyze(op, symtab)
+                if isinstance(analysis, InscriptResult):
+                    raise _RuntimeError(analysis.message or "")
+                out = _exec_op(op, symtab)
+                if out:
+                    outputs.extend(out)
+            return outputs
+        analysis = analyze(body, symtab)
+        if isinstance(analysis, InscriptResult):
+            raise _RuntimeError(analysis.message or "")
+        return _exec_op(body, symtab) or []
+    finally:
+        _restore_parameter(snapshot, symtab)
+
+
+def _bind_parameter(
+    node: CompositionCallNode,
+    symtab: dict[str, SymbolEntry],
+) -> tuple[str | None, SymbolEntry | None, bool]:
+    """v2d §96 — save the existing binding (if any), then bind the
+    parameter name to a deep copy of the passed argument's value.
+
+    Returns (param_name, saved_entry, was_present). Pass this tuple to
+    `_restore_parameter` after body execution.
+    """
+    entry = symtab[node.name]
+    param = entry.composition_param
+    if param is None or node.arg is None:
+        return None, None, False
+    arg_entry = symtab[node.arg]
+    saved = symtab.get(param)
+    symtab[param] = SymbolEntry(
+        name=param,
+        value=copy.deepcopy(arg_entry.value),
+        type=arg_entry.type,
+        schema=copy.deepcopy(arg_entry.schema),
+        source_names=(
+            list(arg_entry.source_names)
+            if arg_entry.source_names is not None
+            else None
+        ),
+    )
+    return param, saved, saved is not None
+
+
+def _restore_parameter(
+    snapshot: tuple[str | None, SymbolEntry | None, bool],
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    """v2d §96 — symmetric counterpart to `_bind_parameter`. Pops the
+    parameter binding and (if any) restores the prior global entry."""
+    param, saved, was_present = snapshot
+    if param is None:
+        return
+    if was_present:
+        symtab[param] = saved
+    else:
+        symtab.pop(param, None)
 
 
 # ---------------------------------------------------------------------------
@@ -513,22 +602,28 @@ def _composition_call_value(
     node: CompositionCallNode,
     symtab: dict[str, SymbolEntry],
 ) -> Any:
-    """v2b §76 — evaluate a composition call as a value expression."""
-    body = symtab[node.name].value
-    if isinstance(body, SequenceNode):
-        ops = body.operations
-        for op in ops[:-1]:
-            analysis = analyze(op, symtab)
-            if isinstance(analysis, InscriptResult):
-                raise _RuntimeError(analysis.message or "")
-            _exec_op(op, symtab)
-        last = ops[-1]
-    else:
-        last = body
-    analysis = analyze(last, symtab)
-    if isinstance(analysis, InscriptResult):
-        raise _RuntimeError(analysis.message or "")
-    return _value_of_op(last, symtab)
+    """v2b §76 / v2d §96 + §98 — evaluate a composition call as a value
+    expression. The parameter (if any) is bound for the body's execution
+    and the last operation's value is returned per §76."""
+    snapshot = _bind_parameter(node, symtab)
+    try:
+        body = symtab[node.name].value
+        if isinstance(body, SequenceNode):
+            ops = body.operations
+            for op in ops[:-1]:
+                analysis = analyze(op, symtab)
+                if isinstance(analysis, InscriptResult):
+                    raise _RuntimeError(analysis.message or "")
+                _exec_op(op, symtab)
+            last = ops[-1]
+        else:
+            last = body
+        analysis = analyze(last, symtab)
+        if isinstance(analysis, InscriptResult):
+            raise _RuntimeError(analysis.message or "")
+        return _value_of_op(last, symtab)
+    finally:
+        _restore_parameter(snapshot, symtab)
 
 
 def _value_of_op(op: ASTNode, symtab: dict[str, SymbolEntry]) -> Any:
@@ -600,6 +695,12 @@ def _eval_field(field_node: ASTNode, current_item: Any, symtab) -> Any:
         raise _RuntimeError(
             f"I can't find '{field_node.name}' in this item."
         )
+    if isinstance(field_node, FieldAccessNode):
+        # v2b §77 / v2d §100 — `<field> of <record>` on the left side of
+        # a condition. Read live from the named record at compare time;
+        # the analyzer has already verified record existence + field.
+        record = symtab[field_node.record_name].value
+        return record[field_node.field]
     raise _RuntimeError(f"Unexpected field reference {type(field_node).__name__}.")
 
 
