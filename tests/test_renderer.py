@@ -1,4 +1,4 @@
-"""Phase 4 gate tests: renderer (v1a §33).
+"""Phase 4 gate tests: renderer (v1a §33, v3a §110).
 
 Verifies:
   1. Each AST node renders to a sensible canonical sentence.
@@ -6,6 +6,8 @@ Verifies:
      parseable sentence.
   3. `render_with_explicit_precedence` parenthesizes mixed-precedence
      compound conditions for the AMBER message (v1a §30).
+  4. v3a §110: WhenNode renders multi-line with two-space indentation;
+     round-trips through `parse_when_block` (split-by-indent).
 """
 
 import pytest
@@ -22,18 +24,23 @@ from inscript.parser import (
     EachNode,
     EachPronoun,
     FilterNode,
+    FinishNode,
     GatherNode,
     NameRef,
     NumberLiteral,
+    QuotedString,
     RememberCompositionNode,
     RememberListNode,
     RememberRecordNode,
     RememberValueNode,
     SequenceNode,
     ShowNode,
+    WhenNode,
     parse,
+    parse_when_block,
 )
 from inscript.renderer import render, render_with_explicit_precedence
+from inscript.reorderer import reorder
 from inscript.result import InscriptResult, ResultStatus
 
 
@@ -328,3 +335,161 @@ def test_amber_result_carries_paren_free_canonical():
     assert result.status is ResultStatus.AMBER_PRECEDENCE
     assert result.canonical is not None
     assert "(" not in result.canonical and ")" not in result.canonical
+
+
+# ---------- v3a §110/§112: WhenNode and FinishNode ----------
+
+
+def test_render_finish_node():
+    """v3a §112: `finish` renders as the bare verb leaf."""
+    assert render(FinishNode()) == "finish"
+
+
+def test_render_when_single_action():
+    """v3a §110: header on first line, action indented two spaces.
+
+    Multi-word literal kept here so v2c §90 conditional quoting (which
+    strips quotes from single-word non-reserved values) doesn't make the
+    rendered form ambiguous."""
+    node = WhenNode(
+        condition=ConditionNode(
+            field=NameRef("temperature"), op="above", value=NumberLiteral(100),
+        ),
+        unless=None,
+        action=ShowNode(target=QuotedString("high alert")),
+    )
+    assert render(node) == 'when temperature is above 100\n  show "high alert"'
+
+
+def test_render_when_with_unless_guard():
+    """v3a §109: `unless` appears inline on the header line."""
+    node = WhenNode(
+        condition=ConditionNode(
+            field=NameRef("temperature"), op="above", value=NumberLiteral(100),
+        ),
+        unless=ConditionNode(
+            field=NameRef("silenced"), op="equal_to", value=BareWord("true"),
+        ),
+        action=ShowNode(target=QuotedString("high alert")),
+    )
+    rendered = render(node)
+    assert "when temperature is above 100" in rendered
+    assert "unless silenced is equal to true" in rendered
+    assert '  show "high alert"' in rendered
+
+
+def test_render_when_multi_statement_action_block():
+    """v3a §110: SequenceNode actions render one indented line per
+    operation, preserving block structure."""
+    node = WhenNode(
+        condition=ConditionNode(
+            field=NameRef("level"), op="above", value=NumberLiteral(50),
+        ),
+        unless=None,
+        action=SequenceNode(operations=[
+            ShowNode(target=QuotedString("very high")),
+            RememberValueNode(name="status", value=BareWord("active")),
+        ]),
+    )
+    rendered = render(node)
+    lines = rendered.split("\n")
+    assert lines[0] == "when level is above 50"
+    assert lines[1].startswith("  ") and 'show "very high"' in lines[1]
+    assert lines[2].startswith("  ") and "remember" in lines[2]
+
+
+def test_render_when_with_finish_action():
+    """v3a §112: `finish` as the action body renders cleanly."""
+    node = WhenNode(
+        condition=ConditionNode(
+            field=NameRef("level"), op="above", value=NumberLiteral(2),
+        ),
+        unless=None,
+        action=FinishNode(),
+    )
+    assert render(node) == "when level is above 2\n  finish"
+
+
+def test_render_when_with_explicit_precedence_parenthesizes_mixed():
+    """v3a §123 amber: mixed and/or in a `when` condition is rendered
+    with parens so the user sees how the parser grouped them.
+
+    (Uses `score`/`level`/`humidity` rather than `a`/`b`/`c` because
+    `a` is an article in Inscript — reserved words can't appear as
+    field names.)"""
+    node = WhenNode(
+        condition=CompoundConditionNode(
+            left=CompoundConditionNode(
+                left=ConditionNode(NameRef("score"), "above", NumberLiteral(1)),
+                right=ConditionNode(NameRef("level"), "above", NumberLiteral(2)),
+                connector="and",
+            ),
+            right=ConditionNode(NameRef("humidity"), "above", NumberLiteral(3)),
+            connector="or",
+        ),
+        unless=None,
+        action=ShowNode(target=QuotedString("high alert")),
+    )
+    rendered = render_with_explicit_precedence(node)
+    # The (left AND right) group is rendered with parens since its
+    # connector differs from the outer OR — mirroring v1a §30.
+    assert "(score is above 1 and level is above 2)" in rendered
+    assert " or humidity is above 3" in rendered
+
+
+def _round_trip_when(header: str, *actions: str) -> tuple[ASTNode, str]:
+    """Parse a `when` block, render it, then re-parse the rendering by
+    splitting it back into header + indented action lines (v3a §110
+    round-trip path)."""
+    header_tokens = reorder(tokenize(header))
+    action_lists = [reorder(tokenize(a)) for a in actions]
+    first = parse_when_block(header_tokens, action_lists)
+    assert not isinstance(first, InscriptResult), f"first parse: {first}"
+
+    rendered = render(first)
+    lines = rendered.split("\n")
+    re_header = reorder(tokenize(lines[0]))
+    re_actions = []
+    for line in lines[1:]:
+        stripped = line.lstrip(" ")
+        if not stripped:
+            continue
+        re_actions.append(reorder(tokenize(stripped)))
+    second = parse_when_block(re_header, re_actions)
+    assert not isinstance(second, InscriptResult), f"re-parse: {second}"
+    assert second == first, f"\n  rendered: {rendered!r}\n  first: {first}\n  second: {second}"
+    return first, rendered
+
+
+def test_when_round_trip_single_action():
+    # Multi-word literal — v2c §90 conditional quoting otherwise drops
+    # quotes off a single-word show target and re-parses it as NameRef,
+    # breaking the AST round-trip.
+    _round_trip_when("when temperature is above 100", 'show "high alert"')
+
+
+def test_when_round_trip_with_unless():
+    _round_trip_when(
+        "when temperature is above 100 unless silenced is equal to true",
+        'show "high alert"',
+    )
+
+
+def test_when_round_trip_multi_statement():
+    _round_trip_when(
+        "when level is above 50",
+        'show "very high"',
+        "remember a string called status with active",
+    )
+
+
+def test_when_round_trip_with_choose_action():
+    _round_trip_when(
+        "when temperature is above 100",
+        'choose if mode is equal to silent: show "silent mode" '
+        'otherwise show "loud alert"',
+    )
+
+
+def test_when_round_trip_with_finish():
+    _round_trip_when("when level is above 2", "finish")

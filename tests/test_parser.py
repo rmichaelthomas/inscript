@@ -909,3 +909,33 @@ def test_parse_when_block_empty_header_is_a_parse_error():
     out = parse_when_block([], [tokenize('show "x"')])
     assert isinstance(out, InscriptResult)
     assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_when_with_mixed_precedence_condition_is_amber():
+    """v3a §123: mixed `and`/`or` in the `when` condition fires amber
+    at registration time (Phase 1), preventing Phase 2 unless the user
+    confirms. The pending_ast carries the WhenNode for resume.
+
+    (Uses `score`/`level`/`humidity` instead of `a`/`b`/`c` because the
+    single-letter article `a` and the multi-word lookahead trigger `equal`
+    are reserved.)"""
+    out = _parse_when(
+        "when score is above 1 and level is above 2 or humidity is above 3",
+        'show "high alert"',
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.AMBER_PRECEDENCE
+    assert out.pending_ast is not None
+    assert isinstance(out.pending_ast, WhenNode)
+
+
+def test_when_with_mixed_precedence_unless_guard_is_amber():
+    """v3a §123: the `unless` guard's precedence is checked independently
+    of the `when` condition's."""
+    out = _parse_when(
+        "when score is above 5 unless level is above 1 and humidity is above 2 "
+        "or temperature is above 3",
+        'show "high alert"',
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.AMBER_PRECEDENCE
