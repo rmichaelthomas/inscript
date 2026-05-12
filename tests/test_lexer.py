@@ -1,0 +1,411 @@
+"""Phase 2 gate tests: lexer (inception §22, v1c §47-§48, v1d §57)."""
+
+import pytest
+
+from inscript.lexer import tokenize
+from inscript.vocabulary import TokenType
+
+
+# ---------- helpers ----------
+
+def types(line: str) -> list[TokenType]:
+    return [t.type for t in tokenize(line)]
+
+
+def values(line: str) -> list[str]:
+    return [t.value for t in tokenize(line)]
+
+
+# ---------- blank lines / whitespace ----------
+
+def test_empty_string_yields_no_tokens():
+    assert tokenize("") == []
+
+
+def test_whitespace_only_yields_no_tokens():
+    assert tokenize("   ") == []
+    assert tokenize("\t\t") == []
+    assert tokenize("\n") == []
+
+
+# ---------- case insensitivity (§22 line 424) ----------
+
+def test_case_is_normalized_to_lowercase():
+    assert values("SHOW Age") == ["show", "age"]
+    assert values("Filter The Orders") == ["filter", "the", "orders"]
+
+
+def test_case_insensitive_classification():
+    toks = tokenize("REMEMBER A NUMBER CALLED Age WITH 30")
+    assert [t.type for t in toks] == [
+        TokenType.VERB, TokenType.ARTICLE, TokenType.UNKNOWN,
+        TokenType.CONNECTIVE, TokenType.UNKNOWN, TokenType.CONNECTIVE,
+        TokenType.NUMBER,
+    ]
+    assert toks[4].value == "age"  # lowercased name
+
+
+# ---------- `equal to` multi-word lookahead (§22 line 426) ----------
+
+def test_equal_to_combines_into_one_operator():
+    toks = tokenize("is equal to 75")
+    assert [t.type for t in toks] == [
+        TokenType.OPERATOR, TokenType.OPERATOR, TokenType.NUMBER,
+    ]
+    assert [t.value for t in toks] == ["is", "equal_to", "75"]
+
+
+def test_not_equal_to_lexes_as_three_operator_tokens():
+    # `not equal to` -> not (operator) + equal_to (operator)
+    toks = tokenize("is not equal to 5")
+    assert [t.type for t in toks] == [
+        TokenType.OPERATOR, TokenType.OPERATOR, TokenType.OPERATOR, TokenType.NUMBER,
+    ]
+    assert [t.value for t in toks] == ["is", "not", "equal_to", "5"]
+
+
+def test_equal_not_followed_by_to_is_unknown():
+    # v1a §29 / v1c §47: parser-level reserved-word check applies; the
+    # lexer simply emits UNKNOWN for bare `equal`.
+    toks = tokenize("equal with 5")
+    assert toks[0].type is TokenType.UNKNOWN
+    assert toks[0].value == "equal"
+
+
+def test_equal_at_end_of_line_is_unknown():
+    toks = tokenize("show equal")
+    assert toks[-1].type is TokenType.UNKNOWN
+    assert toks[-1].value == "equal"
+
+
+# ---------- number recognition (§22 line 428) ----------
+
+def test_integer_recognized_as_number():
+    assert types("30")[0] is TokenType.NUMBER
+    assert types("100")[0] is TokenType.NUMBER
+
+
+def test_decimal_recognized_as_number():
+    toks = tokenize("3.14")
+    assert toks[0].type is TokenType.NUMBER
+    assert toks[0].value == "3.14"
+
+
+def test_decimal_inside_sentence_preserved():
+    toks = tokenize("with 3.14")
+    assert toks[1].type is TokenType.NUMBER
+    assert toks[1].value == "3.14"
+
+
+def test_malformed_number_is_unknown():
+    # Two decimal points => not a number.
+    assert tokenize("3.14.5")[0].type is TokenType.UNKNOWN
+
+
+# ---------- decorative punctuation stripping (§22 line 430) ----------
+
+def test_commas_stripped_from_words():
+    toks = tokenize("with milk, eggs, and bread")
+    assert values(toks if False else "with milk, eggs, and bread") == [
+        "with", "milk", "eggs", "and", "bread",
+    ]
+
+
+def test_trailing_period_stripped():
+    assert values("show numbers.") == ["show", "numbers"]
+
+
+def test_question_and_exclamation_stripped():
+    assert values("show age?") == ["show", "age"]
+    assert values("show age!") == ["show", "age"]
+
+
+def test_trailing_period_does_not_break_number():
+    # `30.` strips trailing `.` to `30`, still a number.
+    toks = tokenize("with 30.")
+    assert toks[-1].type is TokenType.NUMBER
+    assert toks[-1].value == "30"
+
+
+def test_stray_punctuation_drops():
+    # A token consisting only of decorative chars disappears.
+    assert tokenize(",,,") == []
+    assert values("show , age") == ["show", "age"]
+
+
+# ---------- hyphens preserved in names (§22 line 436) ----------
+
+def test_hyphenated_name_is_one_token():
+    toks = tokenize("find-big-orders")
+    assert len(toks) == 1
+    assert toks[0].type is TokenType.UNKNOWN
+    assert toks[0].value == "find-big-orders"
+
+
+# ---------- colon delimiter (§22 line 434) ----------
+
+def test_standalone_colon_is_delimiter():
+    toks = tokenize(":")
+    assert toks[0].type is TokenType.DELIMITER
+    assert toks[0].value == ":"
+
+
+def test_colon_attached_to_word_splits():
+    toks = tokenize("find-big-orders:")
+    assert len(toks) == 2
+    assert toks[0].type is TokenType.UNKNOWN
+    assert toks[0].value == "find-big-orders"
+    assert toks[1].type is TokenType.DELIMITER
+    assert toks[1].value == ":"
+
+
+def test_colon_inside_composition_definition_is_a_delimiter():
+    toks = tokenize("remember how to find-big-orders: filter the orders")
+    # find the delimiter
+    delim_idx = next(i for i, t in enumerate(toks) if t.type is TokenType.DELIMITER)
+    assert toks[delim_idx].value == ":"
+    assert toks[delim_idx - 1].value == "find-big-orders"
+    assert toks[delim_idx + 1].value == "filter"
+
+
+# ---------- positions track original-input character offsets ----------
+
+def test_position_tracks_original_offset():
+    toks = tokenize("  show age")
+    assert toks[0].value == "show"
+    assert toks[0].position == 2
+    assert toks[1].value == "age"
+    assert toks[1].position == 7
+
+
+def test_position_skips_decorative_punctuation():
+    toks = tokenize(",show age")
+    # `show` starts at index 1 in the original line.
+    assert toks[0].value == "show"
+    assert toks[0].position == 1
+
+
+# ---------- end-to-end: 48 locked test sentences (gate sample) ----------
+
+# Representative success and hostile sentences from the test spec
+# (inscript_v1_thirty_sentences.md plus v1c §53 and v1d §65). The lexer
+# must tokenize all of them without raising, including the hostile cases —
+# semantic and parse errors are detected downstream.
+
+ALL_48_SENTENCES = [
+    # Program 1
+    "remember a number called age with 30",
+    "remember a list called colors with red and blue and green",
+    "show age",
+    "show colors",
+    "count the colors",
+    # Program 2
+    "remember an order called order1 with total as 75 and status as active",
+    "remember an order called order2 with total as 30 and status as active",
+    "remember an order called order3 with total as 120 and status as pending",
+    "remember a list called orders with order1 and order2 and order3",
+    "each the orders show total",
+    # Program 3
+    "filter the orders where total is above 50",
+    "show orders",
+    "filter the orders where status is active",
+    "count the orders",
+    "each the orders show status",
+    # Program 4
+    "gather the numbers from 1 to 10",
+    "filter the numbers where each is above 5",
+    "count the numbers",
+    "combine the numbers",
+    "remember the result called total from combine the numbers",
+    # Program 5 — not operator
+    "gather the scores from 1 to 10",
+    "filter the scores where each is not above 7",
+    "filter the scores where each is not below 3",
+    "filter the scores where each is not equal to 5",
+    # Named compositions
+    "remember how to find-big-orders: filter the orders where total is above 50",
+    "remember how to count-active: filter the orders where status is active and count the orders",
+    # Compound conditions
+    "filter the orders where total is above 50 and status is active",
+    "filter the orders where total is below 30 or status is pending",
+    # Mixed precedence amber
+    "filter the orders where total is above 50 and status is active or status is pending",
+    # Equal-to operator
+    "filter the orders where total is equal to 75",
+    # Reserved word error
+    "remember a value called filter with 10",
+    # v1c additions
+    "remember a list called items with filter and blue",
+    "remember an item called widget with 25",
+    "orders total above 50",
+    # v1d hostile block
+    "show missingname",
+    "remember a number called age with 30",
+    "filter age where each is above 5",
+    "remember a list called colors with red and blue and green",
+    "combine colors",
+    "remember an order called order1 with total as 75 and status as active",
+    "remember a list called orders with order1",
+    "filter the orders where missingfield is above 50",
+    "remember a number called age with 30",
+    "each the age show",
+    "remember a number called label with hello",
+    "show label",
+    "remember a list called mixed with 1 and blue",
+    "gather the numbers from 10 to 1",
+    "gather the numbers from 1 to 20000",
+    "remember a number called age with 30",
+    "remember a number called age with 40",
+    "show age",
+    "remember an order called order1 with total as 75 and status as active and status",
+    "remember how to show-missing: show missingname",
+    "show-missing",
+    "remember a list called nums with 1 and 2 and 3 and 4 and 5",
+    "filter nums where each is above 3 and show missingname",
+    "show nums",
+    "remember an order called order1 with total as 75 and status as active",
+    "remember an item called item1 with price as 30 and color as red",
+    "remember a list called mixed-records with order1 and item1",
+    "filter the mixed-records where total is above 50",
+]
+
+
+@pytest.mark.parametrize("line", ALL_48_SENTENCES)
+def test_all_locked_sentences_tokenize_without_error(line: str):
+    toks = tokenize(line)
+    assert toks  # every non-blank locked sentence yields at least one token
+    # No UNKNOWN token may smuggle reserved punctuation in.
+    for t in toks:
+        assert t.value != ""
+
+
+# ---------- detailed token sequences for key sentences ----------
+
+def test_sentence_1_token_sequence():
+    # remember a number called age with 30
+    toks = tokenize("remember a number called age with 30")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "remember"),
+        (TokenType.ARTICLE, "a"),
+        (TokenType.UNKNOWN, "number"),
+        (TokenType.CONNECTIVE, "called"),
+        (TokenType.UNKNOWN, "age"),
+        (TokenType.CONNECTIVE, "with"),
+        (TokenType.NUMBER, "30"),
+    ]
+
+
+def test_sentence_6_record_definition():
+    toks = tokenize("remember an order called order1 with total as 75 and status as active")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "remember"),
+        (TokenType.ARTICLE, "an"),                 # v1c §47
+        (TokenType.UNKNOWN, "order"),
+        (TokenType.CONNECTIVE, "called"),
+        (TokenType.UNKNOWN, "order1"),
+        (TokenType.CONNECTIVE, "with"),
+        (TokenType.UNKNOWN, "total"),
+        (TokenType.CONNECTIVE, "as"),
+        (TokenType.NUMBER, "75"),
+        (TokenType.CONNECTIVE, "and"),
+        (TokenType.UNKNOWN, "status"),
+        (TokenType.CONNECTIVE, "as"),
+        (TokenType.UNKNOWN, "active"),
+    ]
+
+
+def test_sentence_16_gather_range():
+    toks = tokenize("gather the numbers from 1 to 10")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "gather"),
+        (TokenType.ARTICLE, "the"),
+        (TokenType.UNKNOWN, "numbers"),
+        (TokenType.CONNECTIVE, "from"),
+        (TokenType.NUMBER, "1"),
+        (TokenType.CONNECTIVE, "to"),
+        (TokenType.NUMBER, "10"),
+    ]
+
+
+def test_sentence_22_not_above():
+    toks = tokenize("filter the scores where each is not above 7")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "filter"),
+        (TokenType.ARTICLE, "the"),
+        (TokenType.UNKNOWN, "scores"),
+        (TokenType.CONNECTIVE, "where"),
+        (TokenType.VERB, "each"),           # parser reclassifies as pronoun
+        (TokenType.OPERATOR, "is"),
+        (TokenType.OPERATOR, "not"),
+        (TokenType.OPERATOR, "above"),
+        (TokenType.NUMBER, "7"),
+    ]
+
+
+def test_sentence_24_not_equal_to():
+    toks = tokenize("filter the scores where each is not equal to 5")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "filter"),
+        (TokenType.ARTICLE, "the"),
+        (TokenType.UNKNOWN, "scores"),
+        (TokenType.CONNECTIVE, "where"),
+        (TokenType.VERB, "each"),
+        (TokenType.OPERATOR, "is"),
+        (TokenType.OPERATOR, "not"),
+        (TokenType.OPERATOR, "equal_to"),    # multi-word combined
+        (TokenType.NUMBER, "5"),
+    ]
+
+
+def test_sentence_25_named_composition_definition():
+    toks = tokenize("remember how to find-big-orders: filter the orders where total is above 50")
+    # The colon should appear at index 4 (after `remember`, `how`, `to`,
+    # `find-big-orders`).
+    assert toks[0].type is TokenType.VERB and toks[0].value == "remember"
+    assert toks[1].type is TokenType.CONNECTIVE and toks[1].value == "how"
+    assert toks[2].type is TokenType.CONNECTIVE and toks[2].value == "to"
+    assert toks[3].type is TokenType.UNKNOWN and toks[3].value == "find-big-orders"
+    assert toks[4].type is TokenType.DELIMITER and toks[4].value == ":"
+    assert toks[5].type is TokenType.VERB and toks[5].value == "filter"
+
+
+def test_sentence_31_reserved_word_remains_a_verb_token():
+    # Lexer does NOT reclassify `filter` based on position. v1a §29
+    # enforcement is at the parser level.
+    toks = tokenize("remember a value called filter with 10")
+    target = toks[4]
+    assert target.value == "filter"
+    assert target.type is TokenType.VERB
+
+
+def test_sentence_33_article_an():
+    # v1c §47 sentence 33: `an` recognized as ARTICLE.
+    toks = tokenize("remember an item called widget with 25")
+    assert toks[1].type is TokenType.ARTICLE
+    assert toks[1].value == "an"
+
+
+def test_sentence_34_no_verb_input_still_tokenizes_cleanly():
+    # The lexer emits whatever tokens it sees; the parser reports the
+    # no-verb error (v1c §53 sentence 34).
+    toks = tokenize("orders total above 50")
+    assert [t.type for t in toks] == [
+        TokenType.UNKNOWN, TokenType.UNKNOWN, TokenType.OPERATOR, TokenType.NUMBER,
+    ]
+
+
+def test_sentence_47_compound_sequencing():
+    # filter nums where each is above 3 and show missingname
+    toks = tokenize("filter nums where each is above 3 and show missingname")
+    assert [(t.type, t.value) for t in toks] == [
+        (TokenType.VERB, "filter"),
+        (TokenType.UNKNOWN, "nums"),
+        (TokenType.CONNECTIVE, "where"),
+        (TokenType.VERB, "each"),
+        (TokenType.OPERATOR, "is"),
+        (TokenType.OPERATOR, "above"),
+        (TokenType.NUMBER, "3"),
+        (TokenType.CONNECTIVE, "and"),
+        (TokenType.VERB, "show"),
+        (TokenType.UNKNOWN, "missingname"),
+    ]

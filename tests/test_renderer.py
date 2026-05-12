@@ -1,0 +1,295 @@
+"""Phase 4 gate tests: renderer (v1a §33).
+
+Verifies:
+  1. Each AST node renders to a sensible canonical sentence.
+  2. Round-trip: parse(tokenize(render(ast))) == ast for every locked
+     parseable sentence.
+  3. `render_with_explicit_precedence` parenthesizes mixed-precedence
+     compound conditions for the AMBER message (v1a §30).
+"""
+
+import pytest
+
+from inscript.lexer import tokenize
+from inscript.parser import (
+    ASTNode,
+    BareWord,
+    CombineNode,
+    CompositionCallNode,
+    CompoundConditionNode,
+    ConditionNode,
+    CountNode,
+    EachNode,
+    EachPronoun,
+    FilterNode,
+    GatherNode,
+    NameRef,
+    NumberLiteral,
+    RememberCompositionNode,
+    RememberListNode,
+    RememberRecordNode,
+    RememberValueNode,
+    SequenceNode,
+    ShowNode,
+    parse,
+)
+from inscript.renderer import render, render_with_explicit_precedence
+from inscript.result import InscriptResult, ResultStatus
+
+
+def _parse(line: str, comps=None):
+    return parse(tokenize(line), composition_names=comps)
+
+
+# ---------- direct renderings ----------
+
+def test_render_number_literal():
+    assert render(NumberLiteral(30)) == "30"
+    assert render(NumberLiteral(3.14)) == "3.14"
+    assert render(NumberLiteral(75.0)) == "75"  # integer-valued floats lose .0
+
+
+def test_render_bareword_and_nameref():
+    assert render(BareWord("active")) == "active"
+    assert render(NameRef("orders")) == "orders"
+    assert render(EachPronoun()) == "each"
+
+
+def test_render_show():
+    assert render(ShowNode(target=NameRef("age"))) == "show age"
+    assert render(ShowNode(target=None)) == "show"
+
+
+def test_render_filter_above():
+    ast = FilterNode(
+        target=NameRef("orders"),
+        condition=ConditionNode(NameRef("total"), "above", NumberLiteral(50)),
+    )
+    assert render(ast) == "filter the orders where total is above 50"
+
+
+def test_render_filter_equality():
+    ast = FilterNode(
+        target=NameRef("orders"),
+        condition=ConditionNode(NameRef("status"), "is", BareWord("active")),
+    )
+    assert render(ast) == "filter the orders where status is active"
+
+
+def test_render_filter_each_not_above():
+    ast = FilterNode(
+        target=NameRef("scores"),
+        condition=ConditionNode(EachPronoun(), "not_above", NumberLiteral(7)),
+    )
+    assert render(ast) == "filter the scores where each is not above 7"
+
+
+def test_render_filter_not_equal_to():
+    ast = FilterNode(
+        target=NameRef("scores"),
+        condition=ConditionNode(EachPronoun(), "not_equal_to", NumberLiteral(5)),
+    )
+    assert render(ast) == "filter the scores where each is not equal to 5"
+
+
+def test_render_filter_equal_to():
+    ast = FilterNode(
+        target=NameRef("orders"),
+        condition=ConditionNode(NameRef("total"), "equal_to", NumberLiteral(75)),
+    )
+    assert render(ast) == "filter the orders where total is equal to 75"
+
+
+def test_render_count_and_combine_and_gather():
+    assert render(CountNode(target=NameRef("colors"))) == "count the colors"
+    assert render(CombineNode(target=NameRef("numbers"))) == "combine the numbers"
+    assert render(GatherNode("numbers", 1, 10)) == "gather the numbers from 1 to 10"
+
+
+def test_render_each():
+    ast = EachNode(
+        collection=NameRef("orders"),
+        action=ShowNode(target=NameRef("total")),
+    )
+    assert render(ast) == "each the orders show total"
+
+
+def test_render_remember_value():
+    ast = RememberValueNode(name="age", value=NumberLiteral(30))
+    assert render(ast) == "remember a value called age with 30"
+
+
+def test_render_remember_list():
+    ast = RememberListNode(
+        name="colors",
+        items=[BareWord("red"), BareWord("blue")],
+    )
+    assert render(ast) == "remember a list called colors with red and blue"
+
+
+def test_render_remember_record():
+    ast = RememberRecordNode(
+        name="order1",
+        fields=[("total", NumberLiteral(75)), ("status", BareWord("active"))],
+    )
+    assert render(ast) == "remember a record called order1 with total as 75 and status as active"
+
+
+def test_render_remember_composition():
+    body = FilterNode(
+        target=NameRef("orders"),
+        condition=ConditionNode(NameRef("total"), "above", NumberLiteral(50)),
+    )
+    ast = RememberCompositionNode(name="find-big-orders", body=body)
+    assert (
+        render(ast)
+        == "remember how to find-big-orders: filter the orders where total is above 50"
+    )
+
+
+def test_render_sequence():
+    ast = SequenceNode(operations=[
+        FilterNode(
+            target=NameRef("orders"),
+            condition=ConditionNode(NameRef("status"), "is", BareWord("active")),
+        ),
+        CountNode(target=NameRef("orders")),
+    ])
+    assert render(ast) == (
+        "filter the orders where status is active and count the orders"
+    )
+
+
+def test_render_composition_call():
+    assert render(CompositionCallNode("find-big-orders")) == "find-big-orders"
+
+
+# ---------- compound conditions ----------
+
+def test_render_compound_and_chain():
+    cond = CompoundConditionNode(
+        left=ConditionNode(NameRef("total"), "above", NumberLiteral(50)),
+        right=ConditionNode(NameRef("status"), "is", BareWord("active")),
+        connector="and",
+    )
+    ast = FilterNode(target=NameRef("orders"), condition=cond)
+    assert render(ast) == (
+        "filter the orders where total is above 50 and status is active"
+    )
+
+
+def test_render_compound_or_chain():
+    cond = CompoundConditionNode(
+        left=ConditionNode(NameRef("total"), "below", NumberLiteral(30)),
+        right=ConditionNode(NameRef("status"), "is", BareWord("pending")),
+        connector="or",
+    )
+    ast = FilterNode(target=NameRef("orders"), condition=cond)
+    assert render(ast) == (
+        "filter the orders where total is below 30 or status is pending"
+    )
+
+
+def test_render_canonical_is_paren_free_even_with_mixed_precedence():
+    # The canonical form must remain re-parseable; no parens allowed.
+    inner = CompoundConditionNode(
+        left=ConditionNode(NameRef("total"), "above", NumberLiteral(50)),
+        right=ConditionNode(NameRef("status"), "is", BareWord("active")),
+        connector="and",
+    )
+    mixed = CompoundConditionNode(
+        left=inner,
+        right=ConditionNode(NameRef("status"), "is", BareWord("pending")),
+        connector="or",
+    )
+    rendered = render(FilterNode(target=NameRef("orders"), condition=mixed))
+    assert "(" not in rendered and ")" not in rendered
+
+
+def test_explicit_precedence_renders_parens_for_mixed_clause():
+    inner = CompoundConditionNode(
+        left=ConditionNode(NameRef("total"), "above", NumberLiteral(50)),
+        right=ConditionNode(NameRef("status"), "is", BareWord("active")),
+        connector="and",
+    )
+    mixed = CompoundConditionNode(
+        left=inner,
+        right=ConditionNode(NameRef("status"), "is", BareWord("pending")),
+        connector="or",
+    )
+    rendered = render_with_explicit_precedence(
+        FilterNode(target=NameRef("orders"), condition=mixed)
+    )
+    assert "(total is above 50 and status is active) or status is pending" in rendered
+
+
+# ---------- round-trip property ----------
+
+ROUND_TRIP_SENTENCES = [
+    # Program 1
+    ("remember a number called age with 30", None),
+    ("remember a list called colors with red and blue and green", None),
+    ("show age", None),
+    ("show colors", None),
+    ("count the colors", None),
+    # Program 2
+    ("remember an order called order1 with total as 75 and status as active", None),
+    ("remember a list called orders with order1 and order2 and order3", None),
+    ("each the orders show total", None),
+    # Program 3
+    ("filter the orders where total is above 50", None),
+    ("filter the orders where status is active", None),
+    ("each the orders show status", None),
+    # Program 4
+    ("gather the numbers from 1 to 10", None),
+    ("filter the numbers where each is above 5", None),
+    ("combine the numbers", None),
+    ("remember the result called total from combine the numbers", None),
+    # Program 5 — not operator
+    ("filter the scores where each is not above 7", None),
+    ("filter the scores where each is not below 3", None),
+    ("filter the scores where each is not equal to 5", None),
+    # Compound + equality
+    ("filter the orders where total is above 50 and status is active", None),
+    ("filter the orders where total is below 30 or status is pending", None),
+    ("filter the orders where total is equal to 75", None),
+    # Compositions
+    ("remember how to find-big-orders: filter the orders where total is above 50", None),
+    ("remember how to count-active: filter the orders where status is active and count the orders", None),
+    # Composition call
+    ("show-missing", {"show-missing"}),
+    # v1c addition
+    ("remember an item called widget with 25", None),
+    # Each pronoun + sequencing
+    ("filter nums where each is above 3 and show missingname", None),
+    # Single-item list (v1d sentence 38)
+    ("remember a list called orders with order1", None),
+]
+
+
+@pytest.mark.parametrize("line,comps", ROUND_TRIP_SENTENCES)
+def test_round_trip(line, comps):
+    first_ast = _parse(line, comps=comps)
+    assert not isinstance(first_ast, InscriptResult), f"first parse returned {first_ast}"
+
+    rendered = render(first_ast)
+    second_ast = _parse(rendered, comps=comps)
+    assert not isinstance(second_ast, InscriptResult), (
+        f"re-parse of canonical form failed: {rendered} -> {second_ast}"
+    )
+    assert second_ast == first_ast, (
+        f"round-trip mismatch:\n  original: {line!r}\n  canonical: {rendered!r}\n"
+        f"  first AST: {first_ast}\n  second AST: {second_ast}"
+    )
+
+
+# ---------- mixed-precedence amber still produces a canonical rendering ----------
+
+def test_amber_result_carries_paren_free_canonical():
+    result = _parse(
+        "filter the orders where total is above 50 and status is active or status is pending"
+    )
+    assert isinstance(result, InscriptResult)
+    assert result.status is ResultStatus.AMBER_PRECEDENCE
+    assert result.canonical is not None
+    assert "(" not in result.canonical and ")" not in result.canonical

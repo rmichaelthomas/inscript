@@ -1,0 +1,542 @@
+"""Phase 6 gate tests: interpreter (§24, v1b §38-§42, v1c §49, v1d §56-§64)."""
+
+import pytest
+
+from inscript.analyzer import SymbolEntry
+from inscript.interpreter import execute
+from inscript.lexer import tokenize
+from inscript.parser import parse
+from inscript.reorderer import reorder
+from inscript.result import InscriptResult, ResultStatus
+
+
+# ---------------------------------------------------------------------------
+# Helpers — running one statement against a shared symbol table
+# ---------------------------------------------------------------------------
+
+
+def run(line: str, symtab: dict[str, SymbolEntry] | None = None) -> InscriptResult:
+    if symtab is None:
+        symtab = {}
+    tokens = tokenize(line)
+    if not tokens:
+        return InscriptResult(status=ResultStatus.SUCCESS, output=None, executed=True)
+    reordered = reorder(tokens)
+    if isinstance(reordered, InscriptResult):
+        return reordered
+    comp_names = {n for n, e in symtab.items() if e.type == "composition"}
+    ast = parse(reordered, composition_names=comp_names)
+    if isinstance(ast, InscriptResult):
+        return ast
+    return execute(ast, symtab)
+
+
+def run_program(lines: list[str]) -> tuple[dict[str, SymbolEntry], list[InscriptResult]]:
+    symtab: dict[str, SymbolEntry] = {}
+    results = [run(line, symtab) for line in lines]
+    return symtab, results
+
+
+# ---------------------------------------------------------------------------
+# remember + show (Program 1)
+# ---------------------------------------------------------------------------
+
+
+def test_remember_number_stores_silently():
+    symtab: dict[str, SymbolEntry] = {}
+    r = run("remember a number called age with 30", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output is None
+    assert symtab["age"].value == 30
+    assert symtab["age"].type == "number"
+
+
+def test_show_number():
+    symtab = {}
+    run("remember a number called age with 30", symtab)
+    r = run("show age", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output == ["30"]
+
+
+def test_remember_list_of_strings():
+    symtab = {}
+    run("remember a list called colors with red and blue and green", symtab)
+    assert symtab["colors"].value == ["red", "blue", "green"]
+    assert symtab["colors"].type == "list_of_strings"
+
+
+def test_show_list_of_strings_is_comma_separated():
+    symtab = {}
+    run("remember a list called colors with red and blue and green", symtab)
+    r = run("show colors", symtab)
+    assert r.output == ["red, blue, green"]
+
+
+def test_count_auto_shows():
+    symtab = {}
+    run("remember a list called colors with red and blue and green", symtab)
+    r = run("count the colors", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output == ["3"]
+
+
+# ---------------------------------------------------------------------------
+# remember a record + show + each (Program 2)
+# ---------------------------------------------------------------------------
+
+
+def test_remember_record_stores_dict_with_schema():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    assert symtab["order1"].value == {"total": 75, "status": "active"}
+    assert symtab["order1"].schema == {"total": "number", "status": "string"}
+
+
+def test_remember_list_of_records_copies_each_record():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember a list called orders with order1 and order2", symtab)
+    assert symtab["orders"].type == "list_of_records"
+    assert len(symtab["orders"].value) == 2
+    # Copy semantics: mutating order1 should not affect orders[0] (§24 line 486).
+    symtab["order1"].value["total"] = 999
+    assert symtab["orders"].value[0]["total"] == 75
+
+
+def test_each_show_field_emits_one_line_per_record():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember an order called order3 with total as 120 and status as pending", symtab)
+    run("remember a list called orders with order1 and order2 and order3", symtab)
+    r = run("each the orders show total", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output == ["75", "30", "120"]
+
+
+# ---------------------------------------------------------------------------
+# filter is in-place (§24 line 478)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_modifies_target_in_place():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember an order called order3 with total as 120 and status as pending", symtab)
+    run("remember a list called orders with order1 and order2 and order3", symtab)
+    r = run("filter the orders where total is above 50", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output is None
+    totals = [item["total"] for item in symtab["orders"].value]
+    assert totals == [75, 120]
+
+
+def test_filter_chain_reduces_records():
+    symtab = {}
+    for setup in [
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an order called order3 with total as 120 and status as pending",
+        "remember a list called orders with order1 and order2 and order3",
+        "filter the orders where total is above 50",
+        "filter the orders where status is active",
+    ]:
+        run(setup, symtab)
+    assert len(symtab["orders"].value) == 1
+    assert symtab["orders"].value[0]["total"] == 75
+
+
+# ---------------------------------------------------------------------------
+# gather both stores and auto-shows (v1b §40)
+# ---------------------------------------------------------------------------
+
+
+def test_gather_stores_and_auto_shows():
+    symtab = {}
+    r = run("gather the numbers from 1 to 10", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert r.output == ["1, 2, 3, 4, 5, 6, 7, 8, 9, 10"]
+    assert symtab["numbers"].value == list(range(1, 11))
+    assert symtab["numbers"].type == "list_of_numbers"
+
+
+def test_gather_equal_endpoints_single_item():
+    symtab = {}
+    run("gather the numbers from 5 to 5", symtab)
+    assert symtab["numbers"].value == [5]
+
+
+# ---------------------------------------------------------------------------
+# combine non-destructive (v1b §39)
+# ---------------------------------------------------------------------------
+
+
+def test_combine_returns_sum_and_does_not_modify_source():
+    symtab = {}
+    run("gather the numbers from 1 to 5", symtab)
+    r = run("combine the numbers", symtab)
+    assert r.output == ["15"]
+    assert symtab["numbers"].value == [1, 2, 3, 4, 5]  # unchanged
+
+
+def test_remember_from_combine_captures_result():
+    symtab = {}
+    run("gather the numbers from 1 to 5", symtab)
+    run("remember the result called total from combine the numbers", symtab)
+    assert symtab["total"].value == 15
+    assert symtab["total"].type == "number"
+    # Source remains unchanged after capture.
+    assert symtab["numbers"].value == [1, 2, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
+# `not` operator semantics (§21 line 416)
+# ---------------------------------------------------------------------------
+
+
+def test_not_above_includes_boundary():
+    symtab = {}
+    run("gather the scores from 1 to 10", symtab)
+    run("filter the scores where each is not above 7", symtab)
+    assert symtab["scores"].value == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_not_below_includes_boundary():
+    symtab = {}
+    run("gather the scores from 1 to 10", symtab)
+    run("filter the scores where each is not above 7", symtab)
+    run("filter the scores where each is not below 3", symtab)
+    assert symtab["scores"].value == [3, 4, 5, 6, 7]
+
+
+def test_not_equal_to_removes_boundary():
+    symtab = {}
+    run("gather the scores from 1 to 10", symtab)
+    run("filter the scores where each is not above 7", symtab)
+    run("filter the scores where each is not below 3", symtab)
+    run("filter the scores where each is not equal to 5", symtab)
+    assert symtab["scores"].value == [3, 4, 6, 7]
+
+
+# ---------------------------------------------------------------------------
+# equal to (sentence 30)
+# ---------------------------------------------------------------------------
+
+
+def test_equal_to_filters_exactly():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember a list called orders with order1 and order2", symtab)
+    run("filter the orders where total is equal to 75", symtab)
+    assert len(symtab["orders"].value) == 1
+    assert symtab["orders"].value[0]["total"] == 75
+
+
+# ---------------------------------------------------------------------------
+# Display formats (v1b §42)
+# ---------------------------------------------------------------------------
+
+
+def test_show_record_uses_field_value_pairs():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    r = run("show order1", symtab)
+    assert r.output == ["total: 75, status: active"]
+
+
+def test_show_list_of_records_one_per_line():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember a list called orders with order1 and order2", symtab)
+    r = run("show orders", symtab)
+    assert r.output == [
+        "total: 75, status: active",
+        "total: 30, status: active",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Sentence 40 — descriptor decorative, type inferred from value
+# ---------------------------------------------------------------------------
+
+
+def test_sentence_40_descriptor_ignored_value_is_string():
+    symtab = {}
+    run("remember a number called label with hello", symtab)
+    assert symtab["label"].type == "string"
+    assert symtab["label"].value == "hello"
+    r = run("show label", symtab)
+    assert r.output == ["hello"]
+
+
+# ---------------------------------------------------------------------------
+# Sentence 44 — duplicate name overwrite (v1d §58)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_name_overwrites_silently():
+    symtab = {}
+    run("remember a number called age with 30", symtab)
+    run("remember a number called age with 40", symtab)
+    r = run("show age", symtab)
+    assert r.output == ["40"]
+
+
+def test_type_can_change_on_overwrite():
+    symtab = {}
+    run("remember a number called x with 30", symtab)
+    run("remember a list called x with red and blue", symtab)
+    assert symtab["x"].type == "list_of_strings"
+    assert symtab["x"].value == ["red", "blue"]
+
+
+# ---------------------------------------------------------------------------
+# Sentence 46 — composition definition + call-time error
+# ---------------------------------------------------------------------------
+
+
+def test_composition_definition_succeeds_without_name_resolution():
+    symtab = {}
+    r = run("remember how to show-missing: show missingname", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert symtab["show-missing"].type == "composition"
+
+
+def test_composition_call_runs_body_against_current_symtab():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an order called order2 with total as 30 and status as active", symtab)
+    run("remember a list called orders with order1 and order2", symtab)
+    run("remember how to find-big-orders: filter the orders where total is above 50", symtab)
+    r = run("find-big-orders", symtab)
+    assert r.status is ResultStatus.SUCCESS
+    assert len(symtab["orders"].value) == 1
+    assert symtab["orders"].value[0]["total"] == 75
+
+
+def test_composition_call_errors_at_call_time_when_names_missing():
+    symtab = {}
+    run("remember how to show-missing: show missingname", symtab)
+    r = run("show-missing", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "missingname" in r.message
+
+
+# ---------------------------------------------------------------------------
+# Sentence 47 — stepwise execution: earlier filter commits, later show fails
+# ---------------------------------------------------------------------------
+
+
+def test_stepwise_filter_commits_before_later_failure():
+    symtab = {}
+    run("remember a list called nums with 1 and 2 and 3 and 4 and 5", symtab)
+    r = run("filter nums where each is above 3 and show missingname", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "missingname" in r.message
+    # The filter side effect persisted (§56).
+    assert symtab["nums"].value == [4, 5]
+    # And the message acknowledges that.
+    assert "filter has already been applied" in r.message
+
+
+def test_show_after_stepwise_failure_sees_filtered_nums():
+    symtab = {}
+    run("remember a list called nums with 1 and 2 and 3 and 4 and 5", symtab)
+    run("filter nums where each is above 3 and show missingname", symtab)
+    r = run("show nums", symtab)
+    assert r.output == ["4, 5"]
+
+
+# ---------------------------------------------------------------------------
+# Hostile semantic-error sentences from v1d §65
+# ---------------------------------------------------------------------------
+
+
+def test_sentence_35_show_missing_name():
+    r = run("show missingname")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "missingname" in r.message
+
+
+def test_sentence_36_filter_scalar():
+    symtab = {}
+    run("remember a number called age with 30", symtab)
+    r = run("filter age where each is above 5", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "filter a list" in r.message
+
+
+def test_sentence_37_combine_strings():
+    symtab = {}
+    run("remember a list called colors with red and blue and green", symtab)
+    r = run("combine colors", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "only combine numbers" in r.message
+
+
+def test_sentence_39_each_on_scalar():
+    symtab = {}
+    run("remember a number called age with 30", symtab)
+    r = run("each the age show", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "iterate over a list" in r.message
+
+
+def test_sentence_41_mixed_list():
+    r = run("remember a list called mixed with 1 and blue")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "can't mix" in r.message
+
+
+def test_sentence_42_descending_range():
+    r = run("gather the numbers from 10 to 1")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "less than or equal" in r.message
+
+
+def test_sentence_43_range_cap_exceeded():
+    r = run("gather the numbers from 1 to 20000")
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "10,000" in r.message
+
+
+def test_sentence_48_schema_mismatch_in_list_of_records():
+    symtab = {}
+    run("remember an order called order1 with total as 75 and status as active", symtab)
+    run("remember an item called item1 with price as 30 and color as red", symtab)
+    run("remember a list called mixed-records with order1 and item1", symtab)
+    r = run("filter the mixed-records where total is above 50", symtab)
+    assert r.status is ResultStatus.ERROR_SEMANTIC
+    assert "Not every item" in r.message
+    assert "total" in r.message
+
+
+# ---------------------------------------------------------------------------
+# Programs 1–5 end-to-end (the locked thirty)
+# ---------------------------------------------------------------------------
+
+
+def test_program_1_basics():
+    symtab, results = run_program([
+        "remember a number called age with 30",
+        "remember a list called colors with red and blue and green",
+        "show age",
+        "show colors",
+        "count the colors",
+    ])
+    assert results[2].output == ["30"]
+    assert results[3].output == ["red, blue, green"]
+    assert results[4].output == ["3"]
+
+
+def test_program_2_records_and_each():
+    symtab, results = run_program([
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an order called order3 with total as 120 and status as pending",
+        "remember a list called orders with order1 and order2 and order3",
+        "each the orders show total",
+    ])
+    assert results[-1].output == ["75", "30", "120"]
+
+
+def test_program_3_filter_records():
+    symtab, results = run_program([
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an order called order3 with total as 120 and status as pending",
+        "remember a list called orders with order1 and order2 and order3",
+        "filter the orders where total is above 50",
+        "filter the orders where status is active",
+        "count the orders",
+        "each the orders show status",
+    ])
+    assert results[-2].output == ["1"]
+    assert results[-1].output == ["active"]
+
+
+def test_program_4_number_operations():
+    symtab, results = run_program([
+        "gather the numbers from 1 to 10",
+        "filter the numbers where each is above 5",
+        "count the numbers",
+        "combine the numbers",
+        "remember the result called total from combine the numbers",
+    ])
+    assert results[0].output == ["1, 2, 3, 4, 5, 6, 7, 8, 9, 10"]
+    assert results[2].output == ["5"]
+    assert results[3].output == ["40"]
+    assert symtab["total"].value == 40
+    # numbers unchanged after the capture (combine non-destructive)
+    assert symtab["numbers"].value == [6, 7, 8, 9, 10]
+
+
+def test_program_5_not_operator():
+    symtab, results = run_program([
+        "gather the scores from 1 to 10",
+        "filter the scores where each is not above 7",
+        "filter the scores where each is not below 3",
+        "filter the scores where each is not equal to 5",
+    ])
+    assert symtab["scores"].value == [3, 4, 6, 7]
+
+
+# ---------------------------------------------------------------------------
+# Compound conditions (sentences 27-28)
+# ---------------------------------------------------------------------------
+
+
+def test_compound_and_filters_intersection():
+    symtab = {}
+    for s in [
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an order called order3 with total as 120 and status as pending",
+        "remember a list called orders with order1 and order2 and order3",
+    ]:
+        run(s, symtab)
+    run("filter the orders where total is above 50 and status is active", symtab)
+    assert len(symtab["orders"].value) == 1
+    assert symtab["orders"].value[0]["total"] == 75
+
+
+def test_compound_or_filters_union():
+    symtab = {}
+    for s in [
+        "remember an order called order1 with total as 75 and status as active",
+        "remember an order called order2 with total as 30 and status as active",
+        "remember an order called order3 with total as 120 and status as pending",
+        "remember a list called orders with order1 and order2 and order3",
+    ]:
+        run(s, symtab)
+    run("filter the orders where total is below 30 or status is pending", symtab)
+    # order3 has status=pending; nobody has total<30.
+    statuses = [o["status"] for o in symtab["orders"].value]
+    assert statuses == ["pending"]
+
+
+# ---------------------------------------------------------------------------
+# Mixed precedence still returns AMBER (not executed)
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_precedence_is_amber_and_does_not_execute():
+    symtab = {}
+    for s in [
+        "remember an order called order1 with total as 75 and status as active",
+        "remember a list called orders with order1",
+    ]:
+        run(s, symtab)
+    before = list(symtab["orders"].value)
+    r = run(
+        "filter the orders where total is above 50 and status is active or status is pending",
+        symtab,
+    )
+    assert r.status is ResultStatus.AMBER_PRECEDENCE
+    assert r.executed is False
+    assert symtab["orders"].value == before  # unchanged

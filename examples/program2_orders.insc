@@ -1,0 +1,8 @@
+remember an order called order1 with total as 75 and status as active
+remember an order called order2 with total as 30 and status as active
+remember an order called order3 with total as 120 and status as pending
+remember a list called orders with order1 and order2 and order3
+each the orders show total
+filter the orders where total is above 50
+show orders
+count the orders
