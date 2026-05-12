@@ -1,9 +1,14 @@
 # Pipeline architecture
 
-A guide to how Inscript v1 turns a source line into a result. This
-document walks the stages in plain English. For module-level
-implementation details, read the source under `src/inscript/`. For
-the authoritative behavior, read `docs/spec/`.
+A guide to how Inscript turns a source line into a result. This
+document walks the stages in plain English. The pipeline shape
+established in v1 (lexer → reorderer → parser → analyzer →
+interpreter, with the canonical renderer and structured-result handling
+around them) is unchanged through v2a and the v2.1-patches — every
+extension since v1 adds rules to existing modules without adding
+stages or moving the I/O boundary. For module-level implementation
+details, read the source under `src/inscript/`. For the authoritative
+behavior, read `docs/spec/`.
 
 ## The path of a line
 
@@ -101,14 +106,18 @@ fallback.
 Builds an abstract syntax tree (AST). The parser is **slot-filling**:
 each verb has a known signature (e.g. `filter` expects a target and a
 condition), and the parser walks the tokens filling each slot in
-canonical order.
+canonical order. The eight verbs (`remember`, `show`, `filter`,
+`keep`, `count`, `gather`, `combine`, `each`) each route to a
+verb-specific sub-parser that shares helpers — `keep` and `filter`
+share their target-plus-condition shape, for instance.
 
 Several words in the language change meaning depending on context.
 The parser resolves all of them deterministically with parser state
 plus one-token lookahead:
 
 - `and` / `or` — list construction, compound condition, operation
-  sequencing, or record-field continuation, depending on which clause
+  sequencing, record-field continuation, or multi-field display
+  inside `each ... show` (five contexts), depending on which clause
   is active and what the next token is.
 - `is` — comparison introducer (followed by an operator) or equality
   operator (followed by a value).
@@ -118,6 +127,7 @@ plus one-token lookahead:
   (next token is a verb), or simple reference (next token is a name).
 - `each` — iteration verb in verb position; pronoun for the current
   item inside a `where` clause.
+- `of` — field-access connective in `show <field> of <record>`.
 
 If a `where` clause mixes both `and` and `or`, the parse still
 succeeds (standard precedence: `and` binds tighter than `or`), but
@@ -135,11 +145,22 @@ produces a canonical English sentence representing exactly what the
 interpreter is about to run.
 
 This sentence is what the CLI prints right before each statement
-executes:
+executes (unless you pass `--quiet`, which suppresses the echo while
+keeping data output):
 
 ```
 I understand this as: filter the orders where total is above 50
 ```
+
+The renderer preserves your descriptor verbatim, so the prose you
+wrote reads back the same way:
+
+```
+I understand this as: remember a domain called mobius with docs as 91 and words as 381476
+```
+
+(The interpreter ignores `domain` for semantics — descriptors are
+decorative — but the canonical-prose echo keeps your wording.)
 
 The renderer also produces a parenthesized variant for amber-
 precedence messages so the user sees the parser's grouping in plain
@@ -180,20 +201,26 @@ table. Key behaviors:
   an existing one is silently overwritten. The type can change.
 - **`filter` modifies the target list in place.** The original list
   loses items that did not match. There is no output on success.
+- **`keep` returns a fresh list.** Like `filter` but non-destructive
+  — the source is untouched. `keep` auto-shows its matches by
+  default, or its result can be captured via `remember ... from keep
+  ...`. This is the reuse primitive: a `keep`-based composition is
+  callable repeatedly with the same input.
 - **`count`, `gather`, and `combine` auto-show.** `gather` also
-  stores its result under the parsed name.
+  stores its result under the parsed name. `keep` also auto-shows.
 - **`combine` is non-destructive.** It returns a sum without changing
   the source list.
 - **`each` runs the action once per item.** Inside the action, names
   resolve first against the current item (as a field on a record)
-  and then against the symbol table.
+  and then against the symbol table. The sub-action can be `show
+  <field>` or `show <field> and <field>` for multi-field display.
 - **Copy semantics everywhere.** Data is copied when stored or
   retrieved by name. Two names never alias the same underlying
   collection.
 - **Stepwise execution.** When several operations are joined by `and`
   (sequencing, not condition), each one commits independently. If a
   later one fails, earlier side effects remain and the error message
-  names what was completed.
+  names what was completed (with proper capitalization).
 
 ### Structured result
 
@@ -223,10 +250,24 @@ The CLI wrapper (`src/inscript/cli.py`) is the only module that calls
 it for the terminal:
 
 - For success it prints the canonical preview line, then any output
-  lines.
+  lines. The preview is suppressed under `--quiet`.
 - For amber outcomes it prints the message and prompts for
-  confirmation (or auto-confirms in `--test` mode).
+  confirmation (or auto-confirms in `--test` mode). On confirmation
+  the canonical preview is not re-emitted before execution.
 - For errors it prints the message prefixed with `Error:`.
+
+The CLI also applies two display refinements:
+
+- **Auto-show truncation.** When `gather` or `keep` auto-shows a list
+  longer than 20 items, the display is condensed to the first 10
+  items, an ellipsis, and the last 10 items. The symbol table holds
+  the full list; only the display is shortened. Explicit `show
+  <list>` is never truncated — you asked for the whole list.
+- **Blank-line preservation in `--quiet`.** Blank lines in the source
+  file mirror to the output so paragraph breaks survive.
+
+Flags can appear in any argument position, and unknown `--flag`
+typos error rather than silently falling through.
 
 If you embed the interpreter in another program, you bypass the CLI
 and inspect the structured result directly. Every behavior the CLI

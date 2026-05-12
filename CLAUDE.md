@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Inscript is a prose-as-syntax programming language designed by Rob Thomas (R. Michael Thomas). The v1 interpreter is being built in Python. You are the builder. Rob is the architect. All design decisions are locked in the specification documents.
+Inscript is a prose-as-syntax programming language designed by Rob Thomas (R. Michael Thomas). You are the builder. Rob is the architect. All design decisions are locked in the specification documents.
+
+**Current state (May 12, 2026):** v1 interpreter + v2a (`keep` verb, `of` connective, multi-field `each show`, descriptor preservation) + UX polish (`--quiet` flag, named-offender error wording, auto-show truncation) + v2.1-patches (duplicate-field rejection, `of`-on-list suggestion, list-operations-only error). The v2b addendum (`composition return values`, `generalized of`) is **drafted in `docs/spec/inscript_addendum_v2b_composition_returns.md` but not yet implemented**. 418 tests passing. The pipeline architecture from §8–§9 is unchanged through all extensions.
 
 ## Critical Rules
 
@@ -18,19 +20,13 @@ Inscript is a prose-as-syntax programming language designed by Rob Thomas (R. Mi
 
 ## Build Sequence
 
-Follow `BUILD_PLAN.md` in the repo root. Seven phases, each with a gate:
-
-1. Foundation (vocabulary.py, result.py)
-2. Lexer (lexer.py)
-3. Reorderer (reorderer.py)
-4. Parser + Renderer (parser.py, renderer.py)
-5. Semantic Analyzer (analyzer.py)
-6. Interpreter (interpreter.py)
-7. Integration (cli.py, test_integration.py)
+The original v1 build followed the seven-phase plan in `BUILD_PLAN.md` (foundation → lexer → reorderer → parser+renderer → analyzer → interpreter → integration). Each phase had a gate. v1 shipped through all seven; subsequent addenda (v2a, v2.1-patches) extend the existing modules without adding phases. The `BUILD_PLAN.md` plan is preserved as historical record — read it for the original phase shape; read the most recent spec addenda for what the language currently does.
 
 ## Specification Documents
 
-Located in `docs/spec/`:
+Located in `docs/spec/`. Read the relevant section before writing code that touches it.
+
+**v1 build specification (locked, May 11, 2026):**
 
 - `inscript_inception_checkpoint_v1.md` — Language design (vocabulary, pipeline, verb signatures, parser rules, interpreter behaviors)
 - `inscript_addendum_v1a_pre_build.md` — Reserved words, amber light, canonical rendering
@@ -38,19 +34,35 @@ Located in `docs/spec/`:
 - `inscript_addendum_v1c_implementation_hardening.md` — Value-position enforcement, iterator context, output taxonomy, parser lookahead, deterministic interpretation
 - `inscript_addendum_v1d_build_boundary.md` — Final build locks: reorderer scope, stepwise execution, case normalization, duplicate handling, type constraints, range limits, structured results, build boundary
 
-- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, sentences 35–48 in v1d §65.
+**v2 extensions (May 12, 2026):**
+
+- `inscript_addendum_v2a_dogfooding_resolutions.md` — **LOCKED + IMPLEMENTED.** §67 `keep` verb (non-destructive filter), §68 `of` connective (`show <field> of <record>`, single-level), §69 fifth `and` context rule (multi-field `each show`), §70 composition-chaining error message, §71 descriptor preservation, §72 D7 (multi-word strings) deferral. Vocabulary: 8 verbs, 10 connectives, 31 reserved words.
+- `inscript_addendum_v2b_composition_returns.md` — **LOCKED, NOT YET IMPLEMENTED.** §76 composition return values (Path A: implicit return of last op; error at call site for void-result), §77 generalize `of` to any value position (single-level only), §78 list/iteration model clarification, §79–§81 UX items (U7/U8/U9). No vocabulary changes. Test sentences 60–68 are spec'd but not yet wired into the test suite — implement first, then mark spec-completed.
+
+**Test specification:**
+
+- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, 35–48 in v1d §65, 49–59 in v2a §74. Sentences 60–68 are drafted in v2b §83.
+
+**Reading order for a fresh session:** inception checkpoint → v1a/v1b/v1c/v1d in order → v2a → v2b. Each addendum locks decisions on top of all prior; nothing is retracted.
 
 ## Commands
 
 ```bash
-# Run all tests
+# Run all tests (418 passing as of v2a + UX polish + v2.1-patches)
 pytest tests/ -v
 
-# Run a single phase's tests
+# Run a single module's tests
 pytest tests/test_lexer.py -v
 
 # Run the interpreter on a file
 python -m inscript examples/program1_basics.insc
+
+# Run a file with the canonical-echo suppressed (clean output)
+python -m inscript examples/dogfood_1_corpus_summary.insc --quiet
+
+# Test mode (auto-confirms amber outcomes; flags accepted in any position)
+python -m inscript examples/program2_orders.insc --test
+python -m inscript --test --quiet examples/dogfood_v2a_14_realistic.insc
 
 # Interactive REPL
 python -m inscript

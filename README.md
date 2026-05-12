@@ -5,7 +5,7 @@ A prose-as-syntax programming language designed from the human end.
 > *"Every programming language in history was designed by programmers. This one wasn't. That's why the design is different."*
 > — Inscript Inception Checkpoint v1
 
-**Status:** v1 interpreter — feature-complete. 385 tests passing. All 48 locked test sentences executed end-to-end.
+**Status (May 12, 2026):** v1 interpreter + v2a (`keep`, `of`, multi-field `each show`, descriptor preservation) + UX polish (`--quiet`, named-offender errors, auto-show truncation) + v2.1-patches. 418 tests passing. The v2b addendum (composition return values, generalized `of`) is drafted in `docs/spec/` but not yet implemented.
 
 ---
 
@@ -36,7 +36,7 @@ A prose-as-syntax programming language designed from the human end.
 
 `filter the orders where total is above 50` is not a prompt to an AI. It is the program.
 
-Inscript is a general-purpose programming language whose source code is readable English prose. A bounded vocabulary of 29 words combines into sentences that execute directly. There is no separate code the prose generates — the sentence IS the program.
+Inscript is a general-purpose programming language whose source code is readable English prose. A bounded vocabulary of 31 words combines into sentences that execute directly. There is no separate code the prose generates — the sentence IS the program.
 
 This is not a domain-specific language for queries or data, nor a natural-language layer over Python, nor a code-generating AI. It is a programming language with its own pipeline: lexer, reorderer, parser, semantic analyzer, interpreter. The prose-as-syntax constraint is structural, not cosmetic.
 
@@ -60,7 +60,7 @@ Five properties combine in Inscript that exist individually in other systems but
 
 1. **Prose-as-syntax where the prose IS the executable code.** Not prose that generates code (vibe coding). Not prose that describes a game world (Inform 7, which is domain-locked). General-purpose computation expressed as readable English sentences that execute directly.
 
-2. **Bounded vocabulary as design constraint.** 29 reserved words in v1. The vocabulary is the language boundary, not a starter set that grows. Expressiveness scales through domain packs, composition over expansion, and named-composition chunking (inception §19) — not through adding more keywords.
+2. **Bounded vocabulary as design constraint.** 31 reserved words in the current build (8 verbs + 10 connectives + 4 single-word operators + `equal` as a multi-word component + 3 articles + 5 v2-reserved words). The vocabulary is the language boundary, not a starter set that grows. Expressiveness scales through domain packs, composition over expansion, and named-composition chunking (inception §19) — not through adding more keywords. Each v2 addition is the smallest spec change consistent with a surfaced dogfooding gap.
 
 3. **Graduation from tiles to text within one language.** The same AST underlies a tile-composition surface (for first-encounter authoring), a prose surface (for fluent authoring), and an optional symbolic surface (for velocity). Three views, one structure. Scratch-to-Python is two languages; Inscript is one language with three surfaces. The v1 interpreter implements the prose surface; the tile surface is a separate downstream concern.
 
@@ -130,39 +130,49 @@ Test mode (auto-confirms amber prompts so a script doesn't pause):
 python -m inscript --test examples/program2_orders.insc
 ```
 
-Every statement is echoed first in canonical prose form (the parser's interpretation of what you wrote) before any output is shown. This is the "Logic Preview" — see v1a §33.
+Quiet mode (suppresses the canonical-prose echo; useful for any program longer than a few lines):
+
+```bash
+python -m inscript --quiet examples/dogfood_1_corpus_summary.insc
+```
+
+Flags work in any argument position and can be combined. Blank source lines are mirrored to the output under `--quiet` so paragraph breaks survive.
+
+Every statement is echoed first in canonical prose form (the parser's interpretation of what you wrote) before any output is shown — unless `--quiet` is set. This is the "Logic Preview" — see v1a §33.
 
 ---
 
 ## The vocabulary
 
-The v1 vocabulary is 29 reserved words across five categories. The complete list is the entire language surface — no other words are part of Inscript v1, only user-provided names and literal values.
+The current vocabulary is 31 reserved words across five categories. The complete list is the entire language surface — no other words are part of Inscript, only user-provided names and literal values.
 
-### Verbs (7)
+### Verbs (8)
 
 | Verb | Purpose |
 |---|---|
 | `remember` | Store a value, list, record, or named composition |
-| `show` | Display the value of a named item or the current iterator item |
+| `show` | Display the value of a named item or one field of a record (`show total of order1`) |
 | `filter` | Reduce a list in-place by a condition |
+| `keep` | Non-destructive sibling of `filter` — returns matches as a fresh list; source unchanged. v2a §67. |
 | `count` | Return (and auto-show) the size of a list |
 | `gather` | Generate a numeric range, store and auto-show it |
 | `combine` | Sum the numbers in a list (non-destructive, auto-shows) |
-| `each` | Iterate over a list and perform an action per item |
+| `each` | Iterate over a list and perform an action per item; supports `show A and B` for multi-field display (v2a §69) |
 
-### Connectives (9)
+### Connectives (10)
 
 | Connective | Purpose |
 |---|---|
 | `where` | Introduces a filter condition |
-| `and` | List construction; compound condition; operation sequencing; record-field continuation (four contexts, all deterministically disambiguated) |
-| `or` | Same four contexts as `and` |
+| `and` | List construction; compound condition; operation sequencing; record-field continuation; multi-field display in `each ... show` (five contexts, all deterministically disambiguated) |
+| `or` | List construction; compound condition; operation sequencing; record-field continuation (four contexts) |
 | `from` | Range start; result capture; simple reference (three contexts) |
 | `with` | Introduces values, list items, or record fields |
 | `called` | Introduces a name |
 | `to` | Range endpoint, or component of `equal to` |
 | `how` | Signals a named-composition definition (with `to`) |
 | `as` | Field assignment in records |
+| `of` | Single-record field access in `show <field> of <record>` (v2a §68) |
 
 ### Operators (5)
 
@@ -176,7 +186,7 @@ The v1 vocabulary is 29 reserved words across five categories. The complete list
 
 ### Articles (3)
 
-`the`, `a`, `an`. Decorative — the parser ignores them where they appear. (Including `an` is v1c §47; the inception checkpoint originally listed only `the` and `a`.)
+`the`, `a`, `an`. Decorative — the parser ignores them where they appear. (Including `an` is v1c §47; the inception checkpoint originally listed only `the` and `a`.) Descriptors between an article and `called` (`a domain called X`) are also decorative for semantics but are preserved verbatim in the canonical rendering — your wording reads back the way you wrote it (v2a §71).
 
 ### Delimiter (1)
 
@@ -347,15 +357,17 @@ Line 3 then shows `4, 5` — the filter's commit persists. Multi-operation seque
 
 ---
 
-## v1 scope and v2 deferrals
+## Current scope and deferrals
 
-The v1 interpreter passes all 48 locked test sentences. Larger scope is intentionally deferred.
+The shipped build covers v1 (48 locked test sentences) + v2a (11 more sentences, locked in v2a §74) + UX polish + v2.1-patches. 418 tests passing. Larger scope is intentionally deferred.
 
-**v1 is.** Sequential execution. 7 verbs. 29 reserved words. Numbers (integers + decimals). Strings (single-token bare words). Lists (homogeneous — all numbers, all strings, or all records). Records (named fields). Named compositions. In-place filter, non-destructive combine, copy semantics, iterator context for `each`, stepwise sequences.
+**Currently shipped.** Sequential execution. 8 verbs. 10 connectives. 31 reserved words. Numbers (integers + decimals). Strings (single-token bare words). Lists (homogeneous — all numbers, all strings, or all records). Records (named fields). Named compositions. In-place `filter`, non-destructive `keep`, non-destructive `combine`, copy semantics, iterator context for `each`, multi-field display in `each ... show`, single-record field access via `show <field> of <record>`, descriptor preservation, named-offender error wording, stepwise sequences. CLI flags `--quiet` and `--test` (any position).
 
-**v1 is NOT.** Tile-composition interface. Proposal engine and authorize-don't-author authoring flow. Domain packs. Event-driven execution (`when`/`unless`). The verbs `transform`, `choose`, `compare`. Symbolic syntax surface. External data sources. Multi-word strings (no quoting in v1). Composition parameters. Negative numbers. Scope isolation beyond the iterator context. Mixed-type lists. Descending ranges. Ranges over 10,000 items.
+**Drafted in v2b, not yet implemented.** Composition return values (`remember the X from <composition>`). Generalized `of` (using `<field> of <record>` in `where` clauses and other value positions). The list/iteration model clarification (already present as an improved error message; the spec text lands in v2b).
 
-The deferrals are not "TODO when we get to it." Each has a specific reason and a documented v2 grammar plan — see [`docs/roadmap/v1-v2-boundary.md`](docs/roadmap/v1-v2-boundary.md) for a readable walkthrough, or `docs/spec/inscript_addendum_v1d_build_boundary.md` §66 for the locked source.
+**Not built.** Tile-composition interface. Proposal engine and authorize-don't-author authoring flow. Domain packs. Event-driven execution (`when`/`unless`). The verbs `transform`, `choose`, `compare`. Symbolic syntax surface. External data sources. Multi-word strings (D7, deferred to its own checkpoint per v2a §72). Composition parameters and chaining. Negative numbers. Scope isolation beyond the iterator context. Mixed-type lists. Descending ranges. Ranges over 10,000 items. Nested records (and therefore chained `of`).
+
+The deferrals are not "TODO when we get to it." Each has a specific reason and a documented v2 grammar plan — see [`docs/roadmap/v1-v2-boundary.md`](docs/roadmap/v1-v2-boundary.md) for a readable walkthrough, or `docs/spec/inscript_addendum_v1d_build_boundary.md` §66 (and v2a §75, v2b §84) for the locked source.
 
 ---
 
@@ -365,7 +377,7 @@ These are the load-bearing decisions that shape every implementation choice. Eac
 
 **The prose IS the program.** The interpreter operates exclusively on what the user stated. It does not infer, assume, guess, or fill in unstated information. If the prose doesn't say it, it doesn't happen. (v1c §52)
 
-**The vocabulary is the boundary.** 29 reserved words in v1. No quoting mechanism. Vocabulary words cannot appear as user-provided names or as string values. This is structurally why slot-filling parser logic works: every word's category is known in advance. (v1a §29; v1c §46)
+**The vocabulary is the boundary.** 31 reserved words in the current build. No quoting mechanism (D7 deferred to its own checkpoint). Vocabulary words cannot appear as user-provided names or as string values. This is structurally why slot-filling parser logic works: every word's category is known in advance. Each addition to the vocabulary (v2a's `keep`, v2a's `of`) is the smallest spec change consistent with a dogfooded gap. (v1a §29; v1c §46; v2a §73)
 
 **The reorderer does not guess.** When an arrangement of words could fill slots in more than one valid way, the system produces an amber clarification prompt rather than picking one interpretation. Authorship over inference. (inception §17)
 
@@ -421,22 +433,29 @@ inscript/
     └── program2_orders.insc
 ```
 
-385 tests pass via `pytest tests/`. Each spec section that locks a behavior has at least one test that exercises it.
+418 tests pass via `pytest tests/`. Each spec section that locks a behavior has at least one test that exercises it.
 
 ---
 
-## The forty-eight test sentences
+## The locked test sentences
 
-The test suite is built around 48 locked test sentences from `docs/spec/inscript_v1_thirty_sentences.md` plus v1c §53 (sentences 32–34) and v1d §65 (sentences 35–48). Each sentence is simultaneously:
+The test suite is built around locked test sentences that are simultaneously:
 
 - A test case for the lexer, parser, analyzer, and interpreter.
-- A grammar artifact — the sentences ARE the discovered grammar; design questions that emerged while writing them are the eight resolutions in v1b §36–§43.
+- A grammar artifact — the sentences ARE the discovered grammar; design questions that emerged while writing them become the resolutions in v1b §36–§43, v1c §46–§52, v1d §55–§66, v2a §67–§72, and v2b §76–§81.
 - A specification — when the documents and the sentences disagree, the conversation is structured around resolving the inconsistency before any code is written.
 
-Of the 48:
+Sentence numbering accumulates across addenda:
 
-- **34 are success cases.** They parse, validate, and execute to specific outputs and symbol-table states.
-- **14 are hostile cases.** They exercise the error paths: reserved word violations, missing names, type errors, mixed-type lists, descending ranges, range cap exceeded, missing fields on records, malformed records, stepwise-failure context messages.
+| Source | Sentences | Coverage |
+|---|---|---|
+| `inscript_v1_thirty_sentences.md` | 1–30 | The original thirty: every verb in simple + complex forms |
+| v1c §53 | 32–34 | Reserved-word value position, article `an`, no-verb error |
+| v1d §65 | 35–48 | Hostile test block — error paths across all categories |
+| v2a §74 | 49–59 | `keep` basic + capture + composition reuse, `of` field access, multi-field `each show`, composition-chaining error |
+| v2b §83 (drafted, not yet implemented) | 60–68 | Composition returns, generalized `of` in where/with positions, list-model clarification |
+
+Currently 59 sentences are wired through the test suite (those locked through v2a). The 9 v2b sentences are drafted in the spec and will land when the v2b implementation does.
 
 Every sentence is exercised end-to-end in `tests/test_integration.py`.
 
@@ -460,16 +479,27 @@ matters.
 
 ## Specification documents
 
-Five documents constitute the v1 build specification, plus the test spec. Each new document either locks new decisions or closes gaps surfaced by external review of the previous ones. Earlier documents are never overwritten — additions extend the section numbering.
+The build specification has grown by addendum. Each document either locks new decisions or closes gaps surfaced by external review or by dogfooding the previous ones. Earlier documents are never overwritten — additions extend the section numbering.
 
-| Document | Locks |
+| Document | Status | Locks |
+|---|---|---|
+| `inscript_inception_checkpoint_v1.md` | Locked + implemented | Vocabulary (§11), pipeline (§8–§9), verb signatures (§17), parser rules (§21–§22), interpreter behaviors (§24), v1/v2 scope (§25) |
+| `inscript_addendum_v1a_pre_build.md` | Locked + implemented | Reserved-word exclusion (§29), mixed-precedence amber (§30), AST-state-filtered tile tray (§31), authorization-requires-compositional-act (§32), canonical prose rendering (§33) |
+| `inscript_addendum_v1b_design_resolutions.md` | Locked + implemented | Eight design resolutions surfaced by the thirty test sentences (§36–§43); complete parser disambiguation ruleset (§44) |
+| `inscript_addendum_v1c_implementation_hardening.md` | Locked + implemented | Vocabulary words can't be values (§46), article `an` (§47), blank-line handling (§48), iterator context (§49), output taxonomy (§50), parser lookahead capability (§51), deterministic interpretation (§52) |
+| `inscript_addendum_v1d_build_boundary.md` | Locked + implemented | Reorderer scope (§55), stepwise execution (§56), case normalization (§57), duplicate overwrite (§58), homogeneous lists (§59), record schema homogeneity (§60), single-token strings (§61), descending ranges (§62), gather range cap (§63), structured results (§64), build boundary (§66) |
+| `inscript_addendum_v2a_dogfooding_resolutions.md` | Locked + implemented | `keep` verb (§67), `of` connective (§68), multi-field `each show` (§69), composition-chaining error message (§70), descriptor preservation (§71), D7 deferral (§72), updated vocabulary table (§73), test sentences 49–59 (§74) |
+| `inscript_addendum_v2b_composition_returns.md` | **Locked, not yet implemented** | Composition return values (§76), generalize `of` to all value positions (§77), list/iteration model clarification (§78), U7/U8/U9 (§79–§81), test sentences 60–68 (§83) |
+| `inscript_v1_thirty_sentences.md` | Test specification | 30 + 4 (v1c §53) + 14 (v1d §65) + 11 (v2a §74) = 59 sentences currently wired; 9 more drafted in v2b §83 |
+
+Two triage documents and two gap inventories under `docs/` show how each addendum was scoped against dogfooding evidence:
+
+| Document | Role |
 |---|---|
-| `inscript_inception_checkpoint_v1.md` | Vocabulary (§11), pipeline (§8–§9), verb signatures (§17), parser rules (§21–§22), interpreter behaviors (§24), v1/v2 scope (§25) |
-| `inscript_addendum_v1a_pre_build.md` | Reserved-word exclusion (§29), mixed-precedence amber (§30), AST-state-filtered tile tray (§31), authorization-requires-compositional-act (§32), canonical prose rendering (§33) |
-| `inscript_addendum_v1b_design_resolutions.md` | Eight design resolutions surfaced by the thirty test sentences (§36–§43); complete parser disambiguation ruleset (§44) |
-| `inscript_addendum_v1c_implementation_hardening.md` | Vocabulary words can't be values (§46), article `an` (§47), blank-line handling (§48), iterator context (§49), output taxonomy (§50), parser lookahead capability (§51), deterministic interpretation (§52) |
-| `inscript_addendum_v1d_build_boundary.md` | Reorderer v1 scope (§55), stepwise execution (§56), case normalization (§57), duplicate overwrite (§58), homogeneous lists (§59), record schema homogeneity (§60), single-token strings (§61), descending ranges (§62), gather range cap (§63), structured results (§64), build boundary (§66) |
-| `inscript_v1_thirty_sentences.md` | Test specification: 30 + 4 (v1c §53) + 14 (v1d §65) = 48 sentences |
+| `docs/inscript_gap_inventory_2026_05_12_v1_dogfooding.md` | v1 dogfooding gaps (D1–D8 + UX items) — input to v2a |
+| `docs/inscript_v2_design_triage_2026_05_12.md` | Triage of D1–D8 — feeds v2a |
+| `docs/inscript_gap_inventory_2026_05_12_v2a_dogfooding.md` | v2a dogfooding gaps (D9–D11 + UX items) — input to v2b |
+| `docs/inscript_v2b_design_triage_2026_05_12.md` | Triage of D9–D11 + UX items — feeds v2b |
 
 The spec documents are immutable build artifacts. The code is built against them, not the other way around. When the builder encountered an ambiguity, the choice was to read the relevant document — not to pattern-match or guess.
 
@@ -496,19 +526,22 @@ The Möbius Inscript system is a DSL for behavioral rules within Möbius. The In
 | Role | Person |
 |---|---|
 | Architect, language designer | Rob Thomas (R. Michael Thomas) |
-| v1 interpreter builder | Claude Code |
-| v1 build session | May 11–12, 2026 |
+| Interpreter builder | Claude Code |
+| Build sessions | May 11–12, 2026 (v1 + v2a + UX polish + v2.1-patches; v2b drafted) |
 
-The build was a paired collaboration. The architect produced and approved every design decision in the locked specification documents. The builder translated those decisions into Python — and, when implementation surfaced an ambiguity, opened the spec document rather than guessing. The CLAUDE.md rule: every claim is load-bearing; do not state that a spec section says something without verifying.
+The build is a paired collaboration. The architect produces and approves every design decision in the locked specification documents. The builder translates those decisions into Python — and, when implementation surfaces an ambiguity, opens the spec document rather than guessing. The CLAUDE.md rule: every claim is load-bearing; do not state that a spec section says something without verifying. The rhythm — *spec → dogfood → triage → spec → implement* — is what keeps the language shape coherent across additions.
 
 ---
 
 ## Status and what's next
 
-**v1 interpreter: complete.** 385 tests passing. All 48 locked sentences exercised. The interpreter runs in a terminal as text-only, reads `.insc` source files, and offers an interactive REPL.
+**Currently shipped.** v1 interpreter + v2a additions + UX polish + v2.1-patches. 418 tests passing. The interpreter runs in a terminal as text-only, reads `.insc` source files, and offers an interactive REPL with `--quiet` and `--test` flags.
 
-**Next, in no particular order** (from inception §27, Branches for Future Sessions):
+**Next: v2b implementation.** The v2b spec addendum is locked and drafted (`docs/spec/inscript_addendum_v2b_composition_returns.md`). It adds composition return values and generalizes `of` to all value positions. The architect has resolved all five open design questions; implementation can proceed.
 
+**After v2b** (in no particular order, from inception §27 / Branches for Future Sessions):
+
+- **D7 — multi-word strings.** The largest open language-design question. Deferred to a dedicated checkpoint with external review per v2a §72. Three candidate approaches catalogued (quoting, hyphenation convention, multi-word phrase spans).
 - **Branch C — Tile interface.** Apply the slot-filling architecture to a visual tile-composition surface with AST-state-filtered tray (v1a §31). The interpreter is the engine; the tile surface is one of three views of the same AST.
 - **Branch D — Identity and positioning.** Name decision (Inscript Programming Language vs. a distinct name from Möbius Inscript). Repository setup. License choice. README as manifesto.
 - **Branch E — Narratia integration.** The proposal engine that powers "authorize, don't author." Observes intent, proposes a working program for the user to modify.

@@ -1,8 +1,14 @@
-# Inscript v1 syntax
+# Inscript syntax
 
-A practical guide to writing Inscript programs. Inscript v1 is a
-bounded prose language: 29 reserved words plus user-provided names and
-literal values. The prose IS the program.
+A practical guide to writing Inscript programs. Inscript is a bounded
+prose language: 31 reserved words plus user-provided names and literal
+values. The prose IS the program.
+
+This guide covers v1 plus the v2a additions that have shipped: the
+`keep` verb, the `of` connective, multi-field `each show`, and
+descriptor preservation. See
+[`../roadmap/v1-v2-boundary.md`](../roadmap/v1-v2-boundary.md) for
+what's drafted in v2b but not yet implemented.
 
 If you have not run the interpreter yet, start with
 [`quickstart.md`](quickstart.md).
@@ -34,7 +40,7 @@ three rules:
 
 - Start with a letter.
 - Contain letters, digits, and hyphens.
-- Cannot be one of the 29 reserved words.
+- Cannot be one of the 31 reserved words.
 
 Valid: `age`, `orders`, `find-big-orders`, `order1`, `my-list`.
 
@@ -43,7 +49,7 @@ Invalid: `1st-order` (starts with a digit), `filter`
 
 ## Verbs
 
-There are seven verbs. Most statements begin with one.
+There are eight verbs. Most statements begin with one.
 
 ### `remember`
 
@@ -57,8 +63,11 @@ remember a value called greeting with hello
 ```
 
 The descriptor between the article and `called` (here `number` and
-`value`) is decorative — the interpreter ignores it. The type is
-inferred from the value itself: `30` is a number, `hello` is text.
+`value`) is decorative — the interpreter ignores it for semantics. The
+type is inferred from the value itself: `30` is a number, `hello` is
+text. Your descriptor is preserved in the canonical-prose echo
+("I understand this as: remember a number called age with 30") so the
+language reads back the way you wrote it.
 
 **A list:**
 
@@ -111,6 +120,18 @@ of records shows one record per line.
 Inside `each`, `show` may be used without a target to display the
 current iterator item.
 
+**Single-record field access** uses `of`:
+
+```
+show total of order1
+show status of order1
+```
+
+`<field> of <record>` extracts one field from a named record. The
+field must exist on that record, and `<record>` must be a single
+record (not a list — for lists, iterate with `each`). See the
+[`of` connective](#the-of-connective) section.
+
 ### `filter`
 
 Reduces a list **in place** by a condition.
@@ -123,7 +144,39 @@ filter the numbers where each is above 5
 
 After `filter`, the original list contains only the items that
 matched. Filter produces no output on success — use `show` or `count`
-afterward to inspect the result.
+afterward to inspect the result. To filter without mutating the
+source, use [`keep`](#keep) instead.
+
+### `keep`
+
+Like `filter`, but **non-destructive**: returns the matching items as
+a fresh list while leaving the source untouched.
+
+```
+keep the orders where total is above 50
+```
+
+By default, `keep` auto-shows its matches. To capture the result for
+further analysis, use `remember ... from keep ...`:
+
+```
+remember the big-orders called big from keep the orders where total is above 50
+show big
+count the orders   # still 3 — keep didn't mutate the source
+```
+
+`keep` is the natural building block for reusable filter compositions:
+
+```
+remember how to find-big: keep the orders where total is above 50
+find-big   # auto-shows matches; orders unchanged
+find-big   # callable again; same result
+```
+
+(Capturing `find-big`'s result via `remember the X from find-big`
+needs composition return values — drafted in v2b but not yet
+implemented. Until then, use the inline form `remember the X from keep
+the orders where ...`.)
 
 **Conditions** have the shape `<field> is <operator> <value>` or, for
 flat lists, `each is <operator> <value>`:
@@ -209,12 +262,37 @@ purposes:
 - `show` with no argument displays the current item itself — useful
   for flat lists or whole records.
 
+**Multi-field display.** Inside `each ... show`, multiple field names
+can be separated with `and` to produce one labeled line per record:
+
+```
+each the orders show total and status
+```
+
+Output:
+
+```
+total: 75, status: active
+total: 30, status: active
+total: 120, status: pending
+```
+
+Field order in the output follows the user's order in the source.
+Three or more fields work the same way (`show a and b and c`).
+Listing the same field twice (`show class and class`) is a semantic
+error — the language assumes that's a typo.
+
 Inside a `where` clause, `each` is a **pronoun** for the current item
 being tested, not the iteration verb:
 
 ```
 filter the numbers where each is above 5
 ```
+
+**Note:** `each ... keep where ...` is rejected at parse time. `keep`
+and `filter` are list operations; per-record decisions live in the
+where-clause of a list operation, not in an `each` body. The error
+suggests the list-level alternative.
 
 ## Lists
 
@@ -253,10 +331,42 @@ remember an order called order2 with total as 30 and status as active
 Inside a list of records, every record should share the same field
 names. When you reference a field in a `where` clause (such as
 `total`), the interpreter checks that every record in the list has
-that field — otherwise it stops before running:
+that field — otherwise it stops before running, and the error names
+the first record that's missing the field:
 
-> Error: Not every item in 'mixed-records' has a field called
-> 'total'.
+> Error: 'item1' in 'mixed-records' doesn't have a field called
+> 'total'. Other items do have it.
+
+When no record at all has the field, the wording reflects that:
+
+> Error: No item in 'orders' has a field called 'nonexistent'.
+
+## The `of` connective
+
+`<field> of <record>` accesses one field of one record. It's the
+counterpart to `each ... show <field>` for cases where you just want
+one value from one named record:
+
+```
+show total of order1
+show status of order1
+```
+
+Three checks fire at parse/validation time:
+
+- The record name must exist (`'ghost' is unknown` → error).
+- It must be a single record, not a list. If you point `of` at a list,
+  the error suggests `each`:
+
+  > Error: 'of' needs a single record. 'orders' is a list of records
+  > — did you mean: each the orders show total?
+
+- The record must have the named field.
+
+In the current build, `of` only works in `show`'s target position.
+Generalizing it to value positions (e.g. `keep the docs where total
+is above total of baseline`) is drafted in v2b but not yet
+implemented.
 
 ## Named compositions
 
@@ -285,9 +395,17 @@ If the body references a name that does not exist when you call it,
 the interpreter raises a semantic error at the call site, not at the
 definition.
 
-v1 does not support passing arguments to compositions, and the
-composition name must stand alone — no `from` chaining yet. Both are
-v2 features.
+The current build does not support passing arguments to compositions,
+and the composition name must stand alone — no `from` chaining yet.
+Attempting `find-big-orders from orders` produces:
+
+> Error: Composition chaining isn't supported yet. Call
+> 'find-big-orders' on its own line.
+
+Capturing a composition's return value (`remember the X from
+find-big-orders`) is drafted in v2b but not yet implemented. Until
+then, use the inline form: `remember the X from keep the orders where
+...`.
 
 ## Values
 
@@ -300,11 +418,14 @@ A literal value can be:
   not in the reserved-word list. Examples: `red`, `active`,
   `portland`. Strings are case-folded to lowercase.
 
-v1 does **not** support multi-word strings. A status value like
-`in progress` cannot be expressed because `in` and `progress` would
-tokenize as separate words. A quoting mechanism is a v2 consideration.
+The language does **not** support multi-word strings. A status value
+like `in progress` cannot be expressed because `in` and `progress`
+would tokenize as separate words. A quoting mechanism is the open D7
+question — see [`../roadmap/v1-v2-boundary.md`](../roadmap/v1-v2-boundary.md).
+The hyphenation workaround (`in-progress`) is the recommended pattern
+in the meantime.
 
-Vocabulary words (the 29 reserved words) cannot be used as values
+Vocabulary words (the 31 reserved words) cannot be used as values
 either:
 
 ```
@@ -333,20 +454,30 @@ Type `y` to proceed or `n` to abort and rewrite. Single-operator
 chains (`A and B and C`, or `A or B or C`) do not trigger the prompt
 because associativity makes the parse unambiguous to read.
 
-## v1 limitations at a glance
+## Limitations at a glance
 
-- **Single-word strings only.** No quoting in v1.
+- **Single-word strings only.** No quoting yet (D7, deferred).
 - **Homogeneous lists only.** All numbers, all text, or all records.
 - **No negative numbers.** All literals are zero or positive.
 - **Range cap.** `gather` produces at most 10,000 items.
-- **Ascending ranges only.** `from` must be less than or equal to
-  `to`.
+- **Ascending ranges only.** `from` must be less than or equal to `to`.
 - **No event-driven execution.** `when` and `unless` are reserved but
-  not executable in v1.
+  not executable.
 - **No `transform`, `choose`, `compare`.** Reserved for v2.
+- **No composition return capture yet.** `remember the X from
+  <composition>` is drafted in v2b but not implemented; use the
+  inline form (`remember the X from keep the orders where ...`)
+  meanwhile.
+- **`of` only in `show`'s target position.** Generalizing to all
+  value positions is drafted in v2b.
+- **Single-level `of` only.** `field-a of field-b of record` is a
+  parse error; nested records don't exist yet.
+- **List operations only.** `keep`/`filter` operate on lists.
+  `each ... keep where ...` is rejected (the error suggests the
+  list-level alternative).
 
 See [`../roadmap/v1-v2-boundary.md`](../roadmap/v1-v2-boundary.md) for
-the full v1/v2 boundary.
+the full boundary.
 
 ## Where to go next
 

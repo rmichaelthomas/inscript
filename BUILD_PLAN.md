@@ -8,6 +8,14 @@
 
 ---
 
+## Historical note (added May 12, 2026)
+
+**This plan is the original v1 build artifact. It is preserved as written.** v1 shipped through all seven phases; subsequent work (v2a additions, UX polish, v2.1-patches, the drafted v2b addendum) extends the existing modules without introducing new phases. The pipeline shape established here — lexer → reorderer → parser+renderer → analyzer → interpreter → CLI, with structured results everywhere and I/O only in `cli.py` — is unchanged through every addition since.
+
+For the current spec, read `docs/spec/inscript_addendum_v2a_dogfooding_resolutions.md` and `docs/spec/inscript_addendum_v2b_composition_returns.md` after the v1 documents. For the current status, see `README.md` and `docs/roadmap/v1-v2-boundary.md`. The build plan below is the foundation, not the present.
+
+---
+
 ## SPECIFICATION DOCUMENTS
 
 All design decisions are locked in these five documents, located in `docs/spec/`. **Read all five before writing any code.** When a decision is referenced by section number, look it up — do not guess or pattern-match.

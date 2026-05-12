@@ -1,6 +1,6 @@
 # Quickstart
 
-A short first-run guide for Inscript v1. If you want a deeper tour of
+A short first-run guide for Inscript. If you want a deeper tour of
 the language, read [`syntax.md`](syntax.md) next.
 
 ## Requirements
@@ -20,13 +20,13 @@ pip install -e ".[dev]"
 
 ## Run the test suite
 
-There are 385 tests. They run in well under a second.
+There are 418 tests. They run in well under a second.
 
 ```bash
 pytest tests/
 ```
 
-A clean run is the easiest way to confirm the v1 interpreter is wired
+A clean run is the easiest way to confirm the interpreter is wired
 up correctly in your environment.
 
 ## Run an example file
@@ -95,7 +95,7 @@ What happened:
   auto-shows the result. The source list is unchanged — `combine` does
   not modify `numbers`.
 
-## Test mode
+## Test mode and clean output
 
 If you want to run a `.insc` file non-interactively without being
 prompted to confirm amber outcomes (such as a mixed-precedence
@@ -104,6 +104,17 @@ condition), use `--test`:
 ```bash
 python -m inscript --test examples/program2_orders.insc
 ```
+
+For clean output with the `I understand this as: ...` echo
+suppressed — useful for any program longer than a few lines — add
+`--quiet`:
+
+```bash
+python -m inscript --test --quiet examples/dogfood_1_corpus_summary.insc
+```
+
+Blank source lines mirror through to the output under `--quiet` so
+your paragraph breaks survive. Flags work in any order.
 
 ## Where to go next
 
