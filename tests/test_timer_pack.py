@@ -196,3 +196,87 @@ def test_timer_adapter_elapsed_is_monotonically_non_decreasing():
         assert cur >= prev, f"elapsed went backwards: {prev} -> {cur}"
     # Sanity check: last elapsed is within a reasonable window.
     assert elapsed_values[-1] < 5.0  # 5 ticks * 30ms < 200ms, well under 5s
+
+
+# ---------------------------------------------------------------------------
+# Factory + CLI integration
+# ---------------------------------------------------------------------------
+
+
+def test_make_timer_pack_reads_config_fields():
+    from inscript.packs.timer import make_timer_pack
+
+    pack = make_timer_pack({
+        "interval_ms": 75,
+        "max_ticks": 4,
+        "name": "ticker",
+    })
+    assert isinstance(pack, TimerDomainPack)
+    assert pack.name() == "ticker"
+    adapter = pack.adapter()
+    assert isinstance(adapter, TimerAdapter)
+    assert adapter.interval_ms == 75
+    assert adapter.max_ticks == 4
+
+
+def test_make_timer_pack_defaults_are_sensible():
+    from inscript.packs.timer import make_timer_pack
+
+    pack = make_timer_pack({})
+    adapter = pack.adapter()
+    assert adapter.interval_ms == 1000  # _DEFAULT_INTERVAL_MS
+    assert adapter.max_ticks is None  # run forever by default
+
+
+def test_make_timer_pack_rejects_unknown_keys():
+    from inscript.packs.timer import make_timer_pack
+
+    with pytest.raises(ValueError) as exc:
+        make_timer_pack({"interval_ms": 100, "wat": 1})
+    assert "wat" in str(exc.value)
+
+
+def test_load_pack_from_arg_inline_timer():
+    from inscript.cli import load_pack_from_arg
+
+    pack = load_pack_from_arg(
+        '{"type": "timer", "interval_ms": 50, "max_ticks": 2}'
+    )
+    assert pack.name() == "timer"
+    decls = {d.name for d in pack.declarations()}
+    assert decls == {"tick", "elapsed"}
+
+
+def test_load_pack_from_arg_inline_test_default_type():
+    """Configs without a `"type"` key remain TestDomainPack — preserves
+    backward compatibility with existing dogfood pack JSON files."""
+    from inscript.cli import load_pack_from_arg
+
+    pack = load_pack_from_arg(
+        '{"declarations": [["x", "number"]], "script": [["x", 1], "[done]"]}'
+    )
+    assert {d.name for d in pack.declarations()} == {"x"}
+
+
+def test_load_pack_from_arg_file_path_still_works(tmp_path):
+    """Regression: existing dogfood JSON files (no `"type"` field) load
+    as TestDomainPack."""
+    import json
+    from inscript.cli import load_pack_from_arg
+
+    p = tmp_path / "pack.json"
+    p.write_text(json.dumps({
+        "name": "weather",
+        "declarations": [["temperature", "number"]],
+        "script": [["temperature", 100], "[done]"],
+    }))
+    pack = load_pack_from_arg(str(p))
+    assert pack.name() == "weather"
+
+
+def test_load_pack_from_arg_unknown_type_raises():
+    from inscript.cli import load_pack_from_arg
+
+    with pytest.raises(ValueError) as exc:
+        load_pack_from_arg('{"type": "no-such-pack"}')
+    assert "no-such-pack" in str(exc.value)

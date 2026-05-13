@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 from ..adapter import (
     Adapter,
@@ -149,3 +150,32 @@ class TimerDomainPack(DomainPack):
                 name=self._name,
             )
         return self._adapter
+
+
+_TIMER_CONFIG_KEYS = {"interval_ms", "max_ticks", "name"}
+
+
+def make_timer_pack(config: dict[str, Any]) -> TimerDomainPack:
+    """Factory used by the CLI `--pack` flag when `type == "timer"`.
+
+    Accepts a dict (typically decoded from JSON) with optional keys:
+      - `interval_ms`: int, default 1000.
+      - `max_ticks`:   int or null, default null (run forever).
+      - `name`:        str, default "timer".
+    Unknown keys raise — typos shouldn't silently produce a default
+    pack."""
+    extra = set(config) - _TIMER_CONFIG_KEYS - {"type"}
+    if extra:
+        raise ValueError(
+            f"timer pack config has unknown key(s): {sorted(extra)}. "
+            f"Allowed: {sorted(_TIMER_CONFIG_KEYS)}."
+        )
+    return TimerDomainPack(
+        interval_ms=int(config.get("interval_ms", _DEFAULT_INTERVAL_MS)),
+        max_ticks=(
+            int(config["max_ticks"])
+            if config.get("max_ticks") is not None
+            else None
+        ),
+        name=str(config.get("name", "timer")),
+    )
