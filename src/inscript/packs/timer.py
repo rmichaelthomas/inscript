@@ -96,10 +96,14 @@ class TimerAdapter(Adapter):
 
     def _run(self) -> None:
         """Background-thread loop. Pushes (tick, N) and (elapsed, S)
-        pairs every `interval_ms`. On `max_ticks` reached, pushes an
-        `AdapterDone` and exits. On external `stop()`, exits without
-        a terminal `AdapterDone` — the listener detects no-activity
-        timeout and shuts down (v3a §119)."""
+        pairs every `interval_ms`. On `max_ticks` reached, pushes one
+        terminal `AdapterDone` and exits the thread.
+
+        On `stop()` (always invoked from the listener itself — see
+        the Adapter contract), `_stop_event` is set; the thread
+        exits without pushing `AdapterDone`. The listener has
+        already decided to shut down by the time stop() is called,
+        so the missing terminal signal is intentional."""
         interval_s = self.interval_ms / 1000.0
         start_time = time.monotonic()
         tick_count = 0
