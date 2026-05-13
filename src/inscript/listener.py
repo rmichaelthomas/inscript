@@ -41,7 +41,10 @@ from .analyzer import SymbolEntry, analyze
 from .interpreter import (
     HandlerTable,
     _exec_op,
+    _FinishRequested,
     _RuntimeError,
+    _in_action_block,
+    _live_value_names_ctx,
 )
 from .parser import (
     ASTNode,
@@ -317,15 +320,35 @@ class _Runner:
             else [action]
         )
 
-        for stmt in statements:
-            # §112 — `finish` is immediate and total. The analyzer in
-            # action-block mode permits FinishNode; the interpreter
-            # honors it before any other action executes.
-            if isinstance(stmt, FinishNode):
-                self.finish_requested = True
-                self.finish_handler_index = handler.index
-                return  # no further statements, no cascades
+        # Set the interpreter's action-block context for the duration
+        # of this handler's firing. _exec_composition_call and the
+        # nested-SequenceNode dispatch in _exec_op read these vars when
+        # re-analyzing inner ops for stepwise semantics (v1d §56).
+        tok_in_action = _in_action_block.set(True)
+        tok_live_names = _live_value_names_ctx.set(
+            self.live_value_registry.names(),
+        )
+        try:
+            yield from self._fire_handler_body(
+                handler, source, values_changed, new_values,
+                cascade_chain, statements, pre_snapshot, watched_names,
+            )
+        finally:
+            _in_action_block.reset(tok_in_action)
+            _live_value_names_ctx.reset(tok_live_names)
 
+    def _fire_handler_body(
+        self,
+        handler: Any,
+        source: str,
+        values_changed: list[str],
+        new_values: dict[str, Any],
+        cascade_chain: frozenset[int],
+        statements: list[ASTNode],
+        pre_snapshot: dict[str, Any],
+        watched_names: list[str],
+    ) -> Iterator[InscriptResult]:
+        for stmt in statements:
             # Analyze each action statement at firing time with full
             # context (live-value names + in_action_block=True). Name
             # resolution that was deferred at registration runs now.
@@ -345,12 +368,20 @@ class _Runner:
                 )
                 continue
 
-            # Execute the statement. _exec_op is the same path the
-            # sequential interpreter uses, so action blocks see identical
-            # behavior to Phase 1 statements modulo the in_action_block
-            # context.
+            # Execute the statement. _exec_op raises _FinishRequested
+            # when a `finish` is reached anywhere in the statement's
+            # evaluation (top-level FinishNode, inside a choose branch,
+            # inside a composition body) — §112 immediate-and-total
+            # semantics. We catch it here, mark the listener for
+            # shutdown, and return without yielding a result for this
+            # statement (§112 — `finish yields only the shutdown
+            # result`).
             try:
                 output = _exec_op(stmt, self.symtab)
+            except _FinishRequested:
+                self.finish_requested = True
+                self.finish_handler_index = handler.index
+                return  # no further statements, no cascades
             except _RuntimeError as e:
                 yield self._wrap_with_trigger(
                     InscriptResult(

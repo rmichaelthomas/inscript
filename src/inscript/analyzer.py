@@ -262,7 +262,11 @@ def _check(
             live_value_names=live_value_names,
         )
     elif isinstance(node, CompositionCallNode):
-        _check_composition_call(node, symtab)
+        _check_composition_call(
+            node, symtab,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     elif isinstance(node, WhenNode):
         # v3a §108/§109: validate condition + unless at registration
         # time. The action block itself is not analyzed here — name
@@ -299,7 +303,11 @@ def _check_remember_value(
     live_value_names: set[str] | None = None,
 ) -> None:
     _check_live_value_remember(node.name, in_action_block, live_value_names)
-    _check_value_expr(node.value, symtab, iterator)
+    _check_value_expr(
+        node.value, symtab, iterator,
+        in_action_block=in_action_block,
+        live_value_names=live_value_names,
+    )
 
 
 def _check_live_value_remember(
@@ -326,6 +334,9 @@ def _check_value_expr(
     value_node: ASTNode,
     symtab: dict[str, SymbolEntry],
     iterator: IteratorContext | None,
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
     if isinstance(value_node, (NumberLiteral, BareWord, EachPronoun, QuotedString)):
         return
@@ -354,9 +365,17 @@ def _check_value_expr(
                 f"Composition '{value_node.name}' doesn't return a value — "
                 f"its last operation is '{verb}', which only has side effects."
             )
-        _analyze_composition_body(value_node, symtab)
+        _analyze_composition_body(
+            value_node, symtab,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
         return
-    _check(value_node, symtab, iterator)
+    _check(
+        value_node, symtab, iterator,
+        in_action_block=in_action_block,
+        live_value_names=live_value_names,
+    )
 
 
 def _composition_void_result_verb(
@@ -874,9 +893,16 @@ def _check_each(
 def _check_composition_call(
     node: CompositionCallNode,
     symtab: dict[str, SymbolEntry],
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
     _check_composition_call_shape(node, symtab)
-    _analyze_composition_body(node, symtab)
+    _analyze_composition_body(
+        node, symtab,
+        in_action_block=in_action_block,
+        live_value_names=live_value_names,
+    )
 
 
 def _check_composition_call_shape(
@@ -913,6 +939,9 @@ def _check_composition_call_shape(
 def _analyze_composition_body(
     node: CompositionCallNode,
     symtab: dict[str, SymbolEntry],
+    *,
+    in_action_block: bool = False,
+    live_value_names: set[str] | None = None,
 ) -> None:
     """Analyze the composition body with the parameter temporarily bound
     to the passed argument's entry (v2d §96). Restore the prior binding
@@ -920,17 +949,30 @@ def _analyze_composition_body(
     it. Mirrors the runtime save/bind/exec/restore shape (interpreter),
     so a body that references `data` resolves the same way at analyze
     time as it will at execution time.
+
+    v3a: `in_action_block` propagates into the body so FinishNode and
+    live-value ownership rules apply consistently — a `finish` inside
+    a composition called from an action block is legal, but the same
+    composition called at top level (Phase 1) fails (§112).
     """
     entry = symtab[node.name]
     body = entry.value
     param = entry.composition_param
     if param is None or node.arg is None:
-        _check(body, symtab, iterator=None)
+        _check(
+            body, symtab, iterator=None,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
         return
     original = symtab.get(param)
     symtab[param] = symtab[node.arg]  # alias for analysis only
     try:
-        _check(body, symtab, iterator=None)
+        _check(
+            body, symtab, iterator=None,
+            in_action_block=in_action_block,
+            live_value_names=live_value_names,
+        )
     finally:
         if original is None:
             symtab.pop(param, None)

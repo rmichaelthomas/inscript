@@ -31,11 +31,25 @@ semantics (v1d §56).
 from __future__ import annotations
 
 import copy
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 from .adapter import LiveValueRegistry
 from .analyzer import SymbolEntry, analyze
+
+
+# v3a — the interpreter's re-analyses inside _exec_composition_call and
+# _execute_sequence need to know whether the current execution is
+# happening inside a `when` action block. The listener sets these
+# context vars before driving _exec_op; everywhere else they default
+# to False/None (Phase 1 sequential behavior).
+_in_action_block: ContextVar[bool] = ContextVar(
+    "inscript_in_action_block", default=False,
+)
+_live_value_names_ctx: ContextVar[set[str] | None] = ContextVar(
+    "inscript_live_value_names", default=None,
+)
 from .parser import (
     ASTNode,
     BareWord,
@@ -275,6 +289,15 @@ class _RuntimeError(Exception):
         self.message = message
 
 
+class _FinishRequested(Exception):
+    """v3a §112 — `finish` is "immediate and total." We propagate it as
+    an exception so it unwinds out of nested structures (choose
+    branches, composition bodies, sequence operations) up to the
+    listener's `_fire_handler`, which catches it and transitions to
+    shutdown. The exception carries no payload — the listener already
+    knows which handler was firing."""
+
+
 def _execute_single(
     node: ASTNode,
     symtab: dict[str, SymbolEntry],
@@ -455,11 +478,23 @@ def _exec_op(
         return _exec_choose(node, symtab, current_item)
     if isinstance(node, CompositionCallNode):
         return _exec_composition_call(node, symtab)
+    if isinstance(node, FinishNode):
+        # v3a §112 — immediate and total. The exception unwinds out of
+        # any surrounding choose/sequence/composition straight to the
+        # listener. Phase 1 sequential execution should have rejected
+        # `finish` at analyze time before reaching here.
+        raise _FinishRequested()
     if isinstance(node, SequenceNode):
-        # Nested sequence (e.g. inside a composition body).
+        # Nested sequence (e.g. inside a composition body). Re-analyze
+        # per op for stepwise semantics (v1d §56); read the listener's
+        # action-block context if we're inside one (v3a §111/§112).
         outputs: list[str] = []
         for op in node.operations:
-            analysis = analyze(op, symtab)
+            analysis = analyze(
+                op, symtab,
+                in_action_block=_in_action_block.get(),
+                live_value_names=_live_value_names_ctx.get(),
+            )
             if isinstance(analysis, InscriptResult):
                 raise _RuntimeError(analysis.message or "")
             outputs.extend(_exec_op(op, symtab, current_item) or [])
@@ -686,19 +721,29 @@ def _exec_composition_call(
     then restores any shadowed global. The analyzer has already verified
     call-site shape (§97), so the binding has well-defined inputs."""
     snapshot = _bind_parameter(node, symtab)
+    in_act = _in_action_block.get()
+    live_names = _live_value_names_ctx.get()
     try:
         body = symtab[node.name].value
         if isinstance(body, SequenceNode):
             outputs: list[str] = []
             for op in body.operations:
-                analysis = analyze(op, symtab)
+                analysis = analyze(
+                    op, symtab,
+                    in_action_block=in_act,
+                    live_value_names=live_names,
+                )
                 if isinstance(analysis, InscriptResult):
                     raise _RuntimeError(analysis.message or "")
                 out = _exec_op(op, symtab)
                 if out:
                     outputs.extend(out)
             return outputs
-        analysis = analyze(body, symtab)
+        analysis = analyze(
+            body, symtab,
+            in_action_block=in_act,
+            live_value_names=live_names,
+        )
         if isinstance(analysis, InscriptResult):
             raise _RuntimeError(analysis.message or "")
         return _exec_op(body, symtab) or []
@@ -822,19 +867,29 @@ def _composition_call_value(
     expression. The parameter (if any) is bound for the body's execution
     and the last operation's value is returned per §76."""
     snapshot = _bind_parameter(node, symtab)
+    in_act = _in_action_block.get()
+    live_names = _live_value_names_ctx.get()
     try:
         body = symtab[node.name].value
         if isinstance(body, SequenceNode):
             ops = body.operations
             for op in ops[:-1]:
-                analysis = analyze(op, symtab)
+                analysis = analyze(
+                    op, symtab,
+                    in_action_block=in_act,
+                    live_value_names=live_names,
+                )
                 if isinstance(analysis, InscriptResult):
                     raise _RuntimeError(analysis.message or "")
                 _exec_op(op, symtab)
             last = ops[-1]
         else:
             last = body
-        analysis = analyze(last, symtab)
+        analysis = analyze(
+            last, symtab,
+            in_action_block=in_act,
+            live_value_names=live_names,
+        )
         if isinstance(analysis, InscriptResult):
             raise _RuntimeError(analysis.message or "")
         return _value_of_op(last, symtab)
