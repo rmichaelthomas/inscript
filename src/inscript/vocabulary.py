@@ -1,4 +1,4 @@
-"""Vocabulary tables and token types for Inscript v1 / v2a / v2d.
+"""Vocabulary tables and token types for Inscript v1 / v2a / v2d / v3a.
 
 Sources:
 - inception §11 (vocabulary table), §17 (verb signatures), §22 (lexer rules)
@@ -10,6 +10,9 @@ Sources:
 - v2d §99 (`choose` promoted from deferred to active verb)
 - v2d §99 (`if` and `otherwise` connectives added)
 - v2d §104 (updated vocabulary: 9 verbs, 12 connectives, 33 reserved words)
+- v3a §112 (`finish` verb — exits listener mode immediately)
+- v3a §108/§109 (`when`/`unless` connectives — promoted from V2_RESERVED)
+- v3a §124 (updated vocabulary: 10 verbs, 14 connectives, 34 reserved words)
 """
 
 from dataclasses import dataclass
@@ -37,20 +40,23 @@ class Token:
     position: int
 
 
-# v1 / v2a / v2d verbs. v2a §67 added `keep`. v2d §99 promoted `choose`
-# from the v2-deferred table to an active verb.
+# v1 / v2a / v2d / v3a verbs. v2a §67 added `keep`. v2d §99 promoted
+# `choose` from the v2-deferred table to an active verb. v3a §112 adds
+# `finish` — exits listener mode immediately and totally.
 VERBS: frozenset[str] = frozenset({
     "remember", "show", "filter", "keep",
     "count", "gather", "combine", "each",
-    "choose",
+    "choose", "finish",
 })
 
-# v1 / v2a / v2d connectives. v2a §68 added `of`. v2d §99 added `if`
-# (introduces a `choose` condition) and `otherwise` (introduces a
-# `choose` alternative branch).
+# v1 / v2a / v2d / v3a connectives. v2a §68 added `of`. v2d §99 added
+# `if` (introduces a `choose` condition) and `otherwise` (introduces a
+# `choose` alternative branch). v3a §108/§109 promotes `when` (registers
+# a reactive handler) and `unless` (guard clause on `when`) from
+# V2_RESERVED to active connectives.
 CONNECTIVES: frozenset[str] = frozenset({
     "where", "and", "or", "from", "with", "called", "to", "how", "as", "of",
-    "if", "otherwise",
+    "if", "otherwise", "when", "unless",
 })
 
 # v1 single-word operators (inception §11). `equal to` is a multi-word
@@ -70,12 +76,11 @@ DELIMITERS: frozenset[str] = frozenset({":"})
 
 # v2 deferred words — designed but not executable in v1. Reserved so
 # user programs that use them as names will not silently break when v2
-# ships (v1a §29). v2d §99 promoted `choose` to an active verb, so it
-# is no longer in this set. `when` and `unless` remain deferred for
-# event-driven execution; `transform` and `compare` continue to be
-# deferred per v2d §103.
+# ships (v1a §29). v2d §99 promoted `choose` to an active verb. v3a §108
+# promoted `when` and `unless` to active connectives. `transform` and
+# `compare` continue to be deferred per v2d §103 / v3a §124.
 V2_RESERVED: frozenset[str] = frozenset({
-    "transform", "compare", "when", "unless",
+    "transform", "compare",
 })
 
 # `equal` is the multi-word lookahead trigger for `equal to`. Reserved
@@ -83,9 +88,9 @@ V2_RESERVED: frozenset[str] = frozenset({
 # dependent on what word follows (v1a §29, v1c §47).
 MULTI_WORD_RESERVED: frozenset[str] = frozenset({"equal"})
 
-# All 33 reserved words (v2d §104: was 31 in v2a §73; +1 for `choose`
-# promoted from deferred, +2 for `if` and `otherwise`. `choose` shifted
-# from V2_RESERVED into VERBS, so the deferred set shrank by 1).
+# All 34 reserved words (v3a §124: was 33 in v2d §104; +1 for `finish`,
+# +0 net for `when`/`unless` which shifted from V2_RESERVED into
+# CONNECTIVES).
 ALL_RESERVED: frozenset[str] = (
     VERBS | CONNECTIVES | OPERATORS | ARTICLES | V2_RESERVED | MULTI_WORD_RESERVED
 )
@@ -129,4 +134,7 @@ VERB_SIGNATURES: dict[str, list[str]] = {
     # v2d §99: condition (after `if`), consequence (after `:`), and
     # alternative (after `otherwise`, optional).
     "choose":   ["condition", "consequence", "alternative"],
+    # v3a §112: `finish` is a slot-less verb — it takes no target,
+    # condition, or value. It exits listener mode immediately and totally.
+    "finish":   [],
 }

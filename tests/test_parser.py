@@ -1,5 +1,5 @@
 """Phase 4 gate tests: parser (inception §17/§21/§22, v1a §29/§30/§33,
-v1b §36/§37/§41/§43/§44, v1c §46/§51, v1d §65).
+v1b §36/§37/§41/§43/§44, v1c §46/§51, v1d §65, v3a §108–§112).
 """
 
 import pytest
@@ -18,6 +18,7 @@ from inscript.parser import (
     EachPronoun,
     FieldAccessNode,
     FilterNode,
+    FinishNode,
     GatherNode,
     NameRef,
     NumberLiteral,
@@ -28,8 +29,11 @@ from inscript.parser import (
     RememberValueNode,
     SequenceNode,
     ShowNode,
+    WhenNode,
     parse,
+    parse_when_block,
 )
+from inscript.reorderer import reorder
 from inscript.result import InscriptResult, ResultStatus
 
 
@@ -651,3 +655,287 @@ def test_choose_missing_colon_is_a_parse_error():
     out = parse_line('choose if score is above 50 show "pass"')
     assert isinstance(out, InscriptResult)
     assert out.status is ResultStatus.ERROR_PARSE
+
+
+# ---------- v3a §112: `finish` verb ----------
+
+
+def test_finish_standalone_parses_to_finish_node():
+    """`finish` is a slot-less verb. The parser accepts it everywhere
+    (composition bodies, top level); the analyzer rejects Phase 1 calls
+    later (v3a §112)."""
+    ast = parse_line("finish")
+    assert ast == FinishNode()
+
+
+def test_finish_inside_composition_body_is_parse_legal():
+    """v3a §112: `finish` may appear inside composition bodies. The
+    semantic check fires at call time, not at definition time."""
+    ast = parse_line("remember how to emergency-stop: finish")
+    assert isinstance(ast, RememberCompositionNode)
+    assert ast.name == "emergency-stop"
+    assert ast.body == FinishNode()
+
+
+def test_finish_with_trailing_tokens_is_a_parse_error():
+    """`finish` takes no slots — anything after it is unexpected."""
+    out = parse_line("finish now")
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+# ---------- v3a §108–§110: `when` block parsing ----------
+
+
+def _parse_when(header: str, *actions: str, comps=None):
+    """Test helper mirroring the CLI's tokenize → reorder → parse_when_block
+    pipeline. `header` is the `when` line; subsequent args are action
+    lines (already de-indented; indentation is a CLI concern, not the
+    parser's)."""
+    header_tokens = tokenize(header)
+    header_reordered = reorder(header_tokens)
+    if isinstance(header_reordered, InscriptResult):
+        return header_reordered
+    action_lists: list = []
+    for a in actions:
+        toks = tokenize(a)
+        if not toks:
+            continue
+        r = reorder(toks)
+        if isinstance(r, InscriptResult):
+            return r
+        action_lists.append(r)
+    return parse_when_block(
+        header_reordered, action_lists, composition_names=comps,
+    )
+
+
+def test_when_with_single_action_produces_when_node():
+    ast = _parse_when(
+        "when temperature is above 100",
+        'show "alert"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert ast.unless is None
+    assert ast.condition == ConditionNode(
+        field=NameRef("temperature"), op="above", value=NumberLiteral(100),
+    )
+    assert ast.action == ShowNode(target=QuotedString("alert"))
+
+
+def test_when_with_unless_guard():
+    ast = _parse_when(
+        "when temperature is above 100 unless silenced is equal to true",
+        'show "alert"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert ast.condition.op == "above"
+    assert ast.unless is not None
+    assert ast.unless == ConditionNode(
+        field=NameRef("silenced"), op="equal_to", value=BareWord("true"),
+    )
+
+
+def test_when_with_multi_statement_action_block_wraps_in_sequence():
+    ast = _parse_when(
+        "when level is above 50",
+        'show "high"',
+        "remember a string called status with active",
+    )
+    assert isinstance(ast, WhenNode)
+    assert isinstance(ast.action, SequenceNode)
+    assert len(ast.action.operations) == 2
+    assert isinstance(ast.action.operations[0], ShowNode)
+    assert isinstance(ast.action.operations[1], RememberValueNode)
+
+
+def test_when_with_optional_colon_is_legal():
+    """v3a §110: the colon after the `when` header is optional. With or
+    without, the indented block defines the action scope."""
+    a = _parse_when("when level is above 50", "show high")
+    b = _parse_when("when level is above 50 :", "show high")
+    # The body content is identical; the AST shape is the same.
+    assert isinstance(a, WhenNode) and isinstance(b, WhenNode)
+    assert a.condition == b.condition
+    assert a.action == b.action
+
+
+def test_when_with_compound_and_condition():
+    """v3a §108: compound `and`/`or` conditions follow the same precedence
+    rules as `where`/`choose`."""
+    ast = _parse_when(
+        "when temperature is above 100 and humidity is above 80",
+        'show "dangerous"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert isinstance(ast.condition, CompoundConditionNode)
+    assert ast.condition.connector == "and"
+
+
+def test_when_with_compound_or_condition():
+    ast = _parse_when(
+        "when status is equal to critical or status is equal to severe",
+        'show "alert"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert isinstance(ast.condition, CompoundConditionNode)
+    assert ast.condition.connector == "or"
+
+
+def test_when_with_of_expression_in_condition():
+    """v3a §108: choose-style operand resolution — `<field> of <record>`
+    is legal on either side of the comparison."""
+    ast = _parse_when(
+        "when status of patient is equal to critical",
+        'show "alert"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert isinstance(ast.condition.field, FieldAccessNode)
+    assert ast.condition.field.field == "status"
+    assert ast.condition.field.record_name == "patient"
+
+
+def test_when_empty_action_block_is_a_parse_error():
+    """v3a §110: an empty action block is a parse error."""
+    out = _parse_when("when temperature is above 100")
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "action block" in out.message.lower()
+
+
+def test_when_missing_condition_is_a_parse_error():
+    """A bare `when` header with nothing after the keyword fails — there
+    is no condition to register."""
+    out = _parse_when("when", 'show "x"')
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_when_unless_without_guard_is_a_parse_error():
+    """`unless` requires its own guard condition; a dangling `unless`
+    after a `when` is a parse error."""
+    out = _parse_when("when x is above 5 unless", 'show "x"')
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_when_inside_composition_body_is_a_parse_error():
+    """v3a §108: `when` is top-level only. A composition body that
+    contains `when` fails at definition time."""
+    out = parse_line(
+        "remember how to register-handler: when x is above 5"
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "top-level" in out.message.lower() or "top level" in out.message.lower()
+
+
+def test_when_inside_each_body_is_a_parse_error():
+    """v3a §108: `when` cannot appear inside an `each` body either."""
+    out = parse_line("each the orders when total is above 50")
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "top-level" in out.message.lower() or "top level" in out.message.lower()
+
+
+def test_nested_when_inside_action_block_is_a_parse_error():
+    """v3a §108: `when` inside another `when` action block is rejected
+    when the action line is parsed."""
+    out = _parse_when(
+        "when temperature is above 100",
+        "when humidity is above 80",  # nested when as the action statement
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    assert "top-level" in out.message.lower() or "top level" in out.message.lower()
+
+
+def test_unless_standalone_is_a_parse_error():
+    """v3a §109: `unless` is a guard clause on `when`, not a standalone
+    statement."""
+    out = parse_line("unless x is equal to true")
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+    # The error message should redirect the user to the correct usage.
+    assert "unless" in out.message.lower()
+
+
+def test_when_with_finish_action():
+    """v3a §112: `finish` is legal inside an action block; it parses as
+    FinishNode and the analyzer/interpreter handle the immediate-and-
+    total semantics. (Uses `level` rather than the spec-sentence-98
+    name `count`, because `count` is a reserved v1 verb — names that
+    collide with verbs are rejected at definition time.)"""
+    ast = _parse_when("when level is above 2", "finish")
+    assert isinstance(ast, WhenNode)
+    assert ast.action == FinishNode()
+
+
+def test_when_with_composition_call_in_action():
+    """v3a §111: named composition calls (parameterized or not) are
+    legal inside action blocks."""
+    ast = _parse_when(
+        "when trigger is above 0",
+        "find-big from orders",
+        comps={"find-big"},
+    )
+    assert isinstance(ast, WhenNode)
+    assert ast.action == CompositionCallNode(name="find-big", arg="orders")
+
+
+def test_when_with_choose_action():
+    """v3a §111: `choose` is legal inside action blocks; the v2d
+    semantic rules carry over (no `each`-nesting)."""
+    ast = _parse_when(
+        "when temperature is above 100",
+        'choose if mode is equal to silent: show "logged" otherwise show "alert"',
+    )
+    assert isinstance(ast, WhenNode)
+    assert isinstance(ast.action, ChooseNode)
+
+
+def test_parse_when_block_rejects_non_when_header():
+    """Defensive: `parse_when_block` validates that its header starts
+    with `when` — the CLI should always honor this, but the parser
+    guards against shape drift."""
+    header_tokens = tokenize("show alert")
+    action_tokens = [tokenize('show "alert"')]
+    out = parse_when_block(header_tokens, action_tokens)
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_parse_when_block_empty_header_is_a_parse_error():
+    out = parse_when_block([], [tokenize('show "x"')])
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.ERROR_PARSE
+
+
+def test_when_with_mixed_precedence_condition_is_amber():
+    """v3a §123: mixed `and`/`or` in the `when` condition fires amber
+    at registration time (Phase 1), preventing Phase 2 unless the user
+    confirms. The pending_ast carries the WhenNode for resume.
+
+    (Uses `score`/`level`/`humidity` instead of `a`/`b`/`c` because the
+    single-letter article `a` and the multi-word lookahead trigger `equal`
+    are reserved.)"""
+    out = _parse_when(
+        "when score is above 1 and level is above 2 or humidity is above 3",
+        'show "high alert"',
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.AMBER_PRECEDENCE
+    assert out.pending_ast is not None
+    assert isinstance(out.pending_ast, WhenNode)
+
+
+def test_when_with_mixed_precedence_unless_guard_is_amber():
+    """v3a §123: the `unless` guard's precedence is checked independently
+    of the `when` condition's."""
+    out = _parse_when(
+        "when score is above 5 unless level is above 1 and humidity is above 2 "
+        "or temperature is above 3",
+        'show "high alert"',
+    )
+    assert isinstance(out, InscriptResult)
+    assert out.status is ResultStatus.AMBER_PRECEDENCE

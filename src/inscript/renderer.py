@@ -1,14 +1,18 @@
-"""Canonical prose renderer for Inscript v1.
+"""Canonical prose renderer for Inscript v1 / v2c / v2d / v3a.
 
 Sources:
 - v1a §33 (canonical prose rendering is a parser output requirement —
   used for intent verification, obfuscation prevention, and round-trip
   fidelity).
 - v1b §42 (display formats — separate concern, lives in interpreter).
+- v3a §110 (action blocks use indentation; WhenNode renders multi-line).
 
 The canonical rendering is the inverse of parsing: it walks the AST and
 emits a paren-free English sentence in canonical slot order. Round-trip
-property: `parse(tokenize(render(ast)))` must equal `ast`.
+property: `parse(tokenize(render(ast)))` must equal `ast`. For v3a
+WhenNode this round-trip goes through the multi-line `parse_when_block`
+path — the rendered output is a `when <cond>` header followed by
+indented action lines (strictly multi-line, not a single line).
 
 A second entry point — `render_with_explicit_precedence` — emits the
 same AST with parenthesized compound conditions, used for the AMBER
@@ -32,6 +36,7 @@ from .parser import (
     EachPronoun,
     FieldAccessNode,
     FilterNode,
+    FinishNode,
     GatherNode,
     KeepNode,
     NameRef,
@@ -43,8 +48,15 @@ from .parser import (
     RememberValueNode,
     SequenceNode,
     ShowNode,
+    WhenNode,
 )
 from .vocabulary import ALL_RESERVED
+
+
+# v3a §110: action lines inside a `when` block are indented by two spaces
+# in canonical form. The parser accepts any positive indent depth; the
+# renderer commits to two-space indentation for consistency.
+_WHEN_BLOCK_INDENT = "  "
 
 
 def render(node: ASTNode) -> str:
@@ -141,6 +153,21 @@ def render(node: ASTNode) -> str:
     if isinstance(node, SequenceNode):
         return " and ".join(render(op) for op in node.operations)
 
+    if isinstance(node, WhenNode):
+        # v3a §108–§110 canonical form:
+        #   when <cond> [unless <guard>]
+        #     <action-line-1>
+        #     <action-line-2>
+        #     ...
+        # Action lines are two-space indented (§110 mandates ≥1 space;
+        # the renderer commits to two for visual consistency). For a
+        # single-statement action block the indented line is the lone
+        # action; for SequenceNode actions, one line per operation.
+        return _render_when(node, render)
+    if isinstance(node, FinishNode):
+        # v3a §112: `finish` is the verb leaf — no slots, no decoration.
+        return "finish"
+
     if isinstance(node, ConditionNode):
         return _render_condition(node)
     if isinstance(node, CompoundConditionNode):
@@ -208,6 +235,11 @@ def render_with_explicit_precedence(node: ASTNode) -> str:
                     f"otherwise {render_with_explicit_precedence(br.action)}"
                 )
         return " ".join(parts)
+    if isinstance(node, WhenNode):
+        # v3a §123 amber path — rendering with explicit parens lets the
+        # user see how the parser grouped a mixed and/or `when` or
+        # `unless` clause before they confirm.
+        return _render_when(node, render_with_explicit_precedence)
     return render(node)
 
 
@@ -245,6 +277,30 @@ def _render_choose(node: ChooseNode) -> str:
         else:
             parts.append(f"otherwise {render(br.action)}")
     return " ".join(parts)
+
+
+def _render_when(node: WhenNode, render_fn) -> str:
+    """v3a §108–§110 — canonical form:
+        when <cond> [unless <guard>]
+          <action-line-1>
+          [<action-line-2>]
+          ...
+
+    `render_fn` is either `render` (paren-free) or
+    `render_with_explicit_precedence` (parens around mixed and/or).
+    Action lines are two-space indented; each operation in a
+    SequenceNode action gets its own line. A single-statement action
+    block produces exactly one indented line.
+    """
+    header = f"when {render_fn(node.condition)}"
+    if node.unless is not None:
+        header += f" unless {render_fn(node.unless)}"
+    if isinstance(node.action, SequenceNode):
+        action_lines = [render_fn(op) for op in node.action.operations]
+    else:
+        action_lines = [render_fn(node.action)]
+    indented = "\n".join(f"{_WHEN_BLOCK_INDENT}{line}" for line in action_lines)
+    return f"{header}\n{indented}"
 
 
 def _render_condition(node: ConditionNode) -> str:

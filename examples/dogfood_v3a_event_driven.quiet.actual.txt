@@ -1,0 +1,18 @@
+=== v3a: phase 1 setup ===
+
+
+=== v3a: registering handlers (no output until phase 2) ===
+
+
+
+
+
+
+
+Listening for changes to: ready-flag, level, patient, alert-mode
+system initialized
+level crossed 50
+patient escalated
+alarm sounding
+20, 30
+Program stopped.

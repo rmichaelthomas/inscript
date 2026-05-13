@@ -1,8 +1,9 @@
-"""Phase 2 gate tests: lexer (inception §22, v1c §47-§48, v1d §57, v2c §86/§89/§91/§92)."""
+"""Phase 2 gate tests: lexer (inception §22, v1c §47-§48, v1d §57,
+v2c §86/§89/§91/§92, v3a §110)."""
 
 import pytest
 
-from inscript.lexer import LexError, tokenize
+from inscript.lexer import LexError, leading_indent, tokenize
 from inscript.vocabulary import TokenType
 
 
@@ -548,3 +549,90 @@ def test_quoted_if_and_otherwise_emit_quoted_string_not_connective():
     toks = tokenize('remember a value called label with "otherwise"')
     label = next(t for t in toks if t.type is TokenType.QUOTED_STRING)
     assert label.value == "otherwise"
+
+
+# ---------- v3a §108/§109/§112: when / unless / finish ----------
+
+
+def test_when_is_a_connective_token():
+    # v3a §108: `when` registers a reactive handler. Classified as a
+    # connective (it introduces a condition like `if` does for `choose`).
+    toks = tokenize("when temperature is above 100")
+    assert toks[0].type is TokenType.CONNECTIVE
+    assert toks[0].value == "when"
+
+
+def test_unless_is_a_connective_token():
+    # v3a §109: `unless` is a guard clause on `when`.
+    toks = tokenize("when x is above 5 unless silenced is equal to true")
+    unless = next(t for t in toks if t.value == "unless")
+    assert unless.type is TokenType.CONNECTIVE
+
+
+def test_finish_is_a_verb_token():
+    # v3a §112: `finish` is the listener-mode exit verb.
+    toks = tokenize("finish")
+    assert toks == toks  # parametric placeholder for next assertion
+    assert toks[0].type is TokenType.VERB
+    assert toks[0].value == "finish"
+
+
+def test_quoted_when_unless_finish_emit_quoted_string():
+    # v2c §89 — quotes bypass vocabulary lookup; `"when"` is data even
+    # though it's now an active connective.
+    for word in ("when", "unless", "finish"):
+        toks = tokenize(f'remember a value called label with "{word}"')
+        label = next(t for t in toks if t.type is TokenType.QUOTED_STRING)
+        assert label.value == word
+
+
+# ---------- v3a §110: leading-space indentation ----------
+
+
+def test_leading_indent_returns_zero_for_no_indent():
+    assert leading_indent("when temperature is above 100") == 0
+    assert leading_indent("remember a number called age with 30") == 0
+
+
+def test_leading_indent_counts_spaces():
+    assert leading_indent("  show alert") == 2
+    assert leading_indent("    show alert") == 4
+    assert leading_indent(" show") == 1
+
+
+def test_leading_indent_only_counts_leading_spaces():
+    # Spaces between tokens don't affect the leading-indent count.
+    assert leading_indent("show  alert") == 0
+    assert leading_indent("  show  alert  rest") == 2
+
+
+def test_leading_indent_zero_for_blank_lines():
+    # v1c §48 — blank lines are skipped by parsing entirely, and have no
+    # meaningful indentation. v3a §110 — block boundary checks ignore them.
+    assert leading_indent("") == 0
+    assert leading_indent("   ") == 0
+    assert leading_indent("\n") == 0
+
+
+def test_leading_indent_rejects_leading_tab():
+    # v3a §110 — tabs in leading whitespace are rejected with a clear
+    # error suggesting spaces.
+    with pytest.raises(LexError) as exc:
+        leading_indent("\tshow alert")
+    assert "tabs" in exc.value.message.lower() or "tab" in exc.value.message.lower()
+    assert "spaces" in exc.value.message.lower()
+
+
+def test_leading_indent_rejects_space_then_tab():
+    # A tab anywhere in the leading-whitespace run is rejected — mixing
+    # spaces and tabs in the indent is the visual-ambiguity case v3a §110
+    # explicitly rules out.
+    with pytest.raises(LexError):
+        leading_indent("  \t  show alert")
+
+
+def test_leading_indent_allows_tab_inside_content():
+    # Tabs in the content (after the first non-whitespace) are tokenizer
+    # whitespace as before — only leading tabs are rejected.
+    assert leading_indent("show\talert") == 0
+    assert leading_indent("  show\talert") == 2
