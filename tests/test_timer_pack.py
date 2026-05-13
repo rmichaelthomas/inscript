@@ -7,16 +7,7 @@ these tests are kept short (≤50 ms) so the suite stays fast.
 
 from __future__ import annotations
 
-import time
-from queue import Empty, Queue
-
-import pytest
-
-from inscript.adapter import (
-    AdapterDone,
-    AdapterUpdate,
-    LiveValueDeclaration,
-)
+from inscript.adapter import LiveValueDeclaration
 from inscript.packs.timer import TimerAdapter, TimerDomainPack
 
 
