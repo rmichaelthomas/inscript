@@ -280,3 +280,92 @@ def test_load_pack_from_arg_unknown_type_raises():
     with pytest.raises(ValueError) as exc:
         load_pack_from_arg('{"type": "no-such-pack"}')
     assert "no-such-pack" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Integration: timer updates flow through the listener and fire handlers
+# ---------------------------------------------------------------------------
+
+
+def test_timer_pack_drives_when_handler_through_listener():
+    """A `when tick is above 2` handler must fire exactly once when
+    the timer pack pushes tick=3 (edge-triggered, v3a §113).
+
+    We use a short interval (20ms) and max_ticks=4 so the test
+    completes in <200ms even on slow CI machines.
+    """
+    import textwrap
+
+    from inscript.cli import Session
+    from inscript.lexer import leading_indent, tokenize
+    from inscript.listener import listen
+    from inscript.result import ResultStatus
+    from inscript.vocabulary import TokenType
+
+    source = textwrap.dedent("""
+        remember a string called status with waiting
+
+        when tick is above 2
+          remember a string called status with crossed
+          finish
+    """).strip("\n")
+
+    pack = TimerDomainPack(interval_ms=20, max_ticks=4)
+    session = Session(domain_packs=[pack])
+
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        indent = leading_indent(line)
+        is_when = False
+        if indent == 0:
+            toks = tokenize(line)
+            if toks and toks[0].type is TokenType.CONNECTIVE and toks[0].value == "when":
+                is_when = True
+        if is_when:
+            block_depth: int | None = None
+            action_lines: list[str] = []
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                if not nxt.strip():
+                    j += 1
+                    continue
+                ni = leading_indent(nxt)
+                if ni == 0:
+                    break
+                if block_depth is None:
+                    block_depth = ni
+                action_lines.append(nxt.lstrip(" "))
+                j += 1
+            session.run_when_block(line, action_lines)
+            i = j
+        else:
+            session.run_line(line)
+            i += 1
+
+    assert not session.handler_table.is_empty()
+    assert not session.phase1_had_error
+
+    results = list(listen(
+        session.symtab,
+        session.handler_table,
+        session.live_value_registry,
+        session.adapters(),
+    ))
+
+    fires = [r for r in results if r.status is ResultStatus.HANDLER_FIRE]
+    shutdowns = [r for r in results if r.status is ResultStatus.SHUTDOWN]
+
+    # `remember … with crossed` is a single HANDLER_FIRE; `finish`
+    # yields the SHUTDOWN result, not a HANDLER_FIRE.
+    assert len(fires) == 1
+    assert shutdowns and shutdowns[-1].metadata == {
+        "reason": "finish", "handler_index": 0,
+    }
+    # The handler should have updated status to "crossed".
+    assert session.symtab["status"].value == "crossed"
