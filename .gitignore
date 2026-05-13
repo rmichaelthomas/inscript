@@ -7,3 +7,6 @@ venv/
 
 # macOS Finder metadata
 .DS_Store
+
+# Superpowers skill scratch / local notes — not part of the spec.
+docs/superpowers/
