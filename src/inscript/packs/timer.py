@@ -26,8 +26,22 @@ from ..adapter import (
 _DEFAULT_INTERVAL_MS = 1000
 
 
+def _validate_timer_args(interval_ms: int, max_ticks: int | None) -> None:
+    if interval_ms <= 0:
+        raise ValueError(
+            f"TimerAdapter interval_ms must be positive (got {interval_ms})."
+        )
+    if max_ticks is not None and max_ticks < 0:
+        raise ValueError(
+            f"TimerAdapter max_ticks must be >= 0 or None (got {max_ticks})."
+        )
+
+
 class TimerAdapter(Adapter):
-    """Real adapter implementation — runs on a background thread."""
+    """Real adapter implementation — will run on a background thread.
+
+    Scaffold only at this stage; threading lands in the next commit.
+    """
 
     def __init__(
         self,
@@ -37,14 +51,7 @@ class TimerAdapter(Adapter):
         name: str = "timer",
     ) -> None:
         super().__init__(name=name)
-        if interval_ms <= 0:
-            raise ValueError(
-                f"TimerAdapter interval_ms must be positive (got {interval_ms})."
-            )
-        if max_ticks is not None and max_ticks < 0:
-            raise ValueError(
-                f"TimerAdapter max_ticks must be >= 0 or None (got {max_ticks})."
-            )
+        _validate_timer_args(interval_ms, max_ticks)
         self.interval_ms = interval_ms
         self.max_ticks = max_ticks
 
@@ -65,6 +72,7 @@ class TimerDomainPack(DomainPack):
         max_ticks: int | None = None,
         name: str = "timer",
     ) -> None:
+        _validate_timer_args(interval_ms, max_ticks)
         self._name = name
         self._interval_ms = interval_ms
         self._max_ticks = max_ticks
