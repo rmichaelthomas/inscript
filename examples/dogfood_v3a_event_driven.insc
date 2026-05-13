@@ -1,0 +1,33 @@
+show "=== v3a: Phase 1 setup ==="
+remember a number called ready-flag with 1
+remember a record called patient with name as alice and status as stable
+remember a list called readings with 10 and 20 and 30
+remember a number called level with 0
+remember a string called alert-mode with off
+
+remember how to find-high from data: keep the data where each is above 15
+
+show "=== v3a: registering handlers (no output until Phase 2) ==="
+
+when ready-flag is above 0
+  show "system initialized"
+
+when level is above 50
+  show "level crossed 50"
+
+when status of patient is equal to critical
+  remember a string called alert-mode with on
+  show "patient escalated"
+
+when alert-mode is equal to on
+  show "alarm sounding"
+
+when level is above 90 unless alert-mode is equal to on
+  show "level above 90 without alarm"
+
+when level is above 100
+  remember the captured-readings called captured from find-high from readings
+  show captured
+
+when level is above 200
+  choose if level is above 250: finish otherwise show "approaching critical"

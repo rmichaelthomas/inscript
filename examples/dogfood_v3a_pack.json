@@ -1,0 +1,12 @@
+{
+  "name": "monitor",
+  "declarations": [],
+  "script": [
+    ["level", 55],
+    ["patient", {"name": "alice", "status": "critical"}],
+    ["level", 95],
+    ["level", 105],
+    ["level", 270],
+    "[done]"
+  ]
+}
