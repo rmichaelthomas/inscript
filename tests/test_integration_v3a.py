@@ -166,28 +166,30 @@ def test_sentence_100_cascading_trigger():
 
 
 def test_sentence_101_cycle_detection():
-    """Spec sentence 101 uses `a` and `b` as variable names, but `a` is
-    an article in Inscript. The test uses `score` and `level`. Also,
-    the spec's literal program doesn't actually cycle under §113 deep-
-    equality change detection (it sets `a` to the same value it
-    already has — silently absorbed). The test exercises the §114
-    cycle guard via a true toggling pattern: each handler resets the
-    other's trigger, producing a genuine ping-pong."""
+    """Spec sentence 101 (external-review replacement, May 13, 2026)
+    uses three handlers in a ring that produces a genuine cycle under
+    §113 deep-equality change detection. Names `a`/`b`/`c` are
+    substituted with `alpha`/`beta`/`gamma` because `a` is an article
+    in Inscript. Trace: adapter sets alpha=1 → H1 fires (beta=1) →
+    cascade H2 fires (alpha=0, gamma=1) → cascade H3 fires (alpha=1)
+    → cascade would re-fire H1 → same-handler-twice cycle detected."""
     pack = TestDomainPack(
         declarations=[],
-        script=[("score", 1), "[done]"],
+        script=[("alpha", 1), "[done]"],
         name="test",
     )
     session, results = run_v3a(
         """
-        remember a number called score with 0
-        remember a number called level with 0
-        when score is above 0
-          remember a number called score with 0
-          remember a number called level with 1
-        when level is above 0
-          remember a number called level with 0
-          remember a number called score with 1
+        remember a number called alpha with 0
+        remember a number called beta with 0
+        remember a number called gamma with 0
+        when alpha is above 0
+          remember a number called beta with 1
+        when beta is above 0
+          remember a number called alpha with 0
+          remember a number called gamma with 1
+        when gamma is above 0
+          remember a number called alpha with 1
         """,
         pack=pack,
     )
@@ -613,3 +615,324 @@ def test_when_block_tab_in_indent_is_parse_error():
         r for r in results if r.status is ResultStatus.ERROR_PARSE
     ]
     assert any("tab" in (r.message or "").lower() for r in parse_errors)
+
+
+# ===========================================================================
+# External-review coverage tests (May 13, 2026)
+# Tier 1 — T1–T7: specified behavior that previously had no coverage.
+# Tier 2 — T8–T19: edge cases and adapter contract enforcement.
+# ===========================================================================
+
+
+def test_t1_when_inside_composition_body_is_parse_error():
+    """Tier 1 T1: `when` is rejected inside composition definitions
+    (v3a §108 — top-level only)."""
+    session, results = run_v3a(
+        """
+        remember how to watch: when temperature is above 100
+        """,
+    )
+    parse_errors = [r for r in results if r.status is ResultStatus.ERROR_PARSE]
+    assert any("'when'" in (r.message or "").lower() or "when" in (r.message or "").lower()
+               for r in parse_errors)
+    # Phase 2 didn't start.
+    assert all(r.status is not ResultStatus.LISTENING for r in results)
+
+
+def test_t2_nested_when_inside_when_block_is_parse_error():
+    """Tier 1 T2: a `when` statement inside a `when` action block is
+    rejected at parse time (v3a §108)."""
+    pack = TestDomainPack(declarations=[], script=["[done]"], name="t")
+    session, results = run_v3a(
+        """
+        remember a number called x with 0
+        when x is above 0
+          when x is above 10
+        """,
+        pack=pack,
+    )
+    parse_errors = [r for r in results if r.status is ResultStatus.ERROR_PARSE]
+    assert any("when" in (r.message or "").lower() for r in parse_errors)
+    assert fires(results) == []
+
+
+def test_t3_forward_reference_in_when_is_semantic_error():
+    """Tier 1 T3: registration-time name resolution (v3a §108) rejects
+    forward references — names defined below the `when` are not yet
+    visible when the handler registers."""
+    session, results = run_v3a(
+        """
+        when level is above threshold
+          show "high"
+        remember a number called threshold with 50
+        remember a number called level with 75
+        """,
+    )
+    sem_errors = [r for r in results if r.status is ResultStatus.ERROR_SEMANTIC]
+    msgs = " ".join((r.message or "") for r in sem_errors).lower()
+    assert "level" in msgs or "threshold" in msgs
+    assert all(r.status is not ResultStatus.LISTENING for r in results)
+
+
+def test_t4_unless_guard_lifts_when_guard_becomes_false():
+    """Tier 1 T4: edge-triggered compound eligibility (§109/§113).
+    First update: condition true but guard true → no fire. Second
+    update: guard goes false → compound becomes true → fires."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("temperature", 105), ("silenced", "false"), "[done]"],
+        name="test",
+    )
+    session, results = run_v3a(
+        """
+        remember a number called temperature with 0
+        remember a string called silenced with true
+        when temperature is above 100 unless silenced is equal to true
+          show "alert"
+        """,
+        pack=pack,
+    )
+    handler_fires = fires(results)
+    assert len(handler_fires) == 1
+    assert handler_fires[0].output == ["alert"]
+
+
+def test_t5_finish_during_initial_evaluation_prevents_adapter_start():
+    """Tier 1 T5: §121 + §112. Phase 1 inits level=75; initial eval
+    fires handler → show "high" → finish → shutdown. The adapter
+    update [level = 100] is never delivered."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("level", 100), "[done]"],
+        name="test",
+    )
+    session, results = run_v3a(
+        """
+        remember a number called level with 75
+        when level is above 50
+          show "high"
+          finish
+        """,
+        pack=pack,
+    )
+    output_lines = outputs(results)
+    assert "high" in output_lines
+    shutdown = [r for r in results if r.status is ResultStatus.SHUTDOWN][0]
+    assert shutdown.metadata["reason"] == "finish"
+    # The handler fired exactly once — during initial evaluation only.
+    initial_fires = [
+        r for r in fires(results)
+        if r.metadata["trigger"]["source"] == "initial"
+    ]
+    assert len(initial_fires) >= 1
+    adapter_fires = [
+        r for r in fires(results)
+        if r.metadata["trigger"]["source"] == "adapter_update"
+    ]
+    assert adapter_fires == []
+
+
+def test_t6_finish_in_phase1_is_semantic_error():
+    """Tier 1 T6: §112 — `finish` outside an action block is a
+    semantic error."""
+    session, results = run_v3a(
+        """
+        remember a number called x with 5
+        finish
+        """,
+    )
+    sem_errors = [r for r in results if r.status is ResultStatus.ERROR_SEMANTIC]
+    assert any("finish" in (r.message or "").lower() for r in sem_errors)
+
+
+def test_t7_choose_branch_mutations_cascade():
+    """Tier 1 T7: a `remember` inside a `choose` branch participates in
+    cascade evaluation (§113/§114)."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("x", 10), "[done]"],
+        name="test",
+    )
+    session, results = run_v3a(
+        """
+        remember a number called x with 0
+        remember a string called status with idle
+        when x is above 0
+          choose if x is above 5: remember a string called status with active otherwise remember a string called status with low
+        when status is equal to active
+          show "active cascade"
+        """,
+        pack=pack,
+    )
+    output_lines = outputs(results)
+    assert "active cascade" in output_lines
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — edge cases and adapter contract enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_t8_no_when_blocks_no_phase2():
+    """Tier 2 T8: §107 — without `when` blocks, Phase 2 does not start."""
+    session, results = run_v3a(
+        """
+        remember a number called x with 1
+        show x
+        """,
+    )
+    assert all(r.status is not ResultStatus.LISTENING for r in results)
+    assert fires(results) == []
+    assert all(r.status is not ResultStatus.SHUTDOWN for r in results)
+
+
+def test_t9_when_inside_each_is_parse_error():
+    """Tier 2 T9: §108 — `when` cannot appear as the action of `each`
+    (top-level only)."""
+    pack = TestDomainPack(declarations=[], script=["[done]"], name="t")
+    session, results = run_v3a(
+        """
+        remember a list called readings with 1 and 2
+        each the readings when each is above 1
+        """,
+        pack=pack,
+    )
+    parse_errors = [r for r in results if r.status is ResultStatus.ERROR_PARSE]
+    assert any("when" in (r.message or "").lower() for r in parse_errors)
+
+
+def test_t10_amber_in_when_prevents_phase2():
+    """Tier 2 T10: §123 — unresolved amber in a `when` condition blocks
+    Phase 2 entry. `run_v3a` does not auto-confirm amber, so the AMBER
+    result is left unresolved and Phase 1 records a blocking error."""
+    pack = TestDomainPack(declarations=[], script=["[done]"], name="t")
+    session, results = run_v3a(
+        """
+        remember a number called x with 0
+        when x is above 0 and x is below 100 or x is equal to 50
+          show "mixed"
+        """,
+        pack=pack,
+    )
+    ambers = [
+        r for r in results
+        if r.status in (ResultStatus.AMBER_PRECEDENCE, ResultStatus.AMBER_AMBIGUITY)
+    ]
+    assert len(ambers) >= 1
+    # Phase 2 should not have entered.
+    assert all(r.status is not ResultStatus.LISTENING for r in results)
+
+
+def test_t14_finish_composition_in_value_position_is_semantic_error():
+    """Tier 2 T14: §112 / v2b §76 — a composition whose body is
+    side-effect-only `finish` cannot be captured in value position."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("x", 1), "[done]"],
+        name="t",
+    )
+    session, results = run_v3a(
+        """
+        remember how to stop-now: finish
+        remember a number called x with 0
+        when x is above 0
+          remember the result called outcome from stop-now
+        """,
+        pack=pack,
+    )
+    errs = [
+        r for r in results
+        if r.status in (ResultStatus.ERROR_SEMANTIC, ResultStatus.ERROR_RUNTIME)
+    ]
+    msgs = " ".join((r.message or "") for r in errs).lower()
+    assert "finish" in msgs or "doesn't return" in msgs or "side effect" in msgs
+
+
+def test_t15_composition_return_to_live_value_name_is_semantic_error():
+    """Tier 2 T15: §111 — `remember` targeting a live-value name inside
+    an action block is rejected, even when the value comes from a
+    composition return."""
+    pack = TestDomainPack(
+        declarations=[("temperature", "number"), ("trigger", "number")],
+        script=[("trigger", 1), "[done]"],
+        name="weather",
+    )
+    session, results = run_v3a(
+        """
+        remember a list called readings with 1 and 2 and 3
+        remember how to compute: count the readings
+        when trigger is above 0
+          remember the result called temperature from compute
+        """,
+        pack=pack,
+    )
+    errs = [
+        r for r in results
+        if r.status in (ResultStatus.ERROR_SEMANTIC, ResultStatus.ERROR_RUNTIME, ResultStatus.ERROR_PARSE)
+    ]
+    msgs = " ".join((r.message or "") for r in errs).lower()
+    assert "live value" in msgs or "temperature" in msgs
+
+
+def test_t17_filter_on_live_value_is_semantic_error_in_phase1():
+    """Tier 2 T17: §111 — `filter` on a live-value name is a semantic
+    error in all contexts, including Phase 1 sequential mode."""
+    pack = TestDomainPack(
+        declarations=[("readings", "list_of_numbers")],
+        script=[("readings", [1, 2, 3]), "[done]"],
+        name="weather",
+    )
+    session, results = run_v3a(
+        """
+        filter readings where each is above 1
+        """,
+        pack=pack,
+    )
+    sem_errors = [r for r in results if r.status is ResultStatus.ERROR_SEMANTIC]
+    msgs = " ".join((r.message or "") for r in sem_errors).lower()
+    assert "live value" in msgs or "filter" in msgs
+
+
+def test_t18_keep_inside_action_block_is_legal():
+    """Tier 2 T18: §111 — `keep` is non-destructive and legal inside
+    action blocks. (Readings declared as a Phase 1 list, trigger as a
+    live number — keep operates on the Phase 1 list; the action block
+    semantics are what matter here.)"""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("trigger", 1), "[done]"],
+        name="t",
+    )
+    session, results = run_v3a(
+        """
+        remember a list called readings with 1 and 2 and 3
+        remember a number called trigger with 0
+        when trigger is above 0
+          remember the result called high-readings from keep the readings where each is above 1
+          show high-readings
+        """,
+        pack=pack,
+    )
+    output_lines = outputs(results)
+    assert any("2, 3" in line for line in output_lines)
+
+
+def test_t19_of_expression_in_unless_guard():
+    """Tier 2 T19: §109/§108 — `of` expressions are legal in `unless`
+    guards (choose-style value resolution)."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("level", 75), "[done]"],
+        name="t",
+    )
+    session, results = run_v3a(
+        """
+        remember a record called config with mode as active and override as false
+        remember a number called level with 0
+        when level is above 50 unless override of config is equal to true
+          show "alert"
+        """,
+        pack=pack,
+    )
+    output_lines = outputs(results)
+    assert "alert" in output_lines

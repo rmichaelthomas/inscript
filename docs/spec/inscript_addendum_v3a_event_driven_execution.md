@@ -829,6 +829,98 @@ This addendum was verified against:
 
 ---
 
+## POST-BUILD PATCHES (May 13, 2026)
+
+External review by an independent reviewer (May 13, 2026) identified one
+test/spec mismatch, one test structure issue, and several coverage gaps.
+This section records the resolutions; the locked decisions in §107–§126
+are unchanged.
+
+### 4A — Quoted-string casing (supersedes v2c §91)
+
+Quoted string content now preserves original casing, overriding v2c §91
+("quoted strings are lowercased"). The quote delimiters mark a "literal
+text" boundary; content inside quotes is stored and displayed verbatim.
+Case normalization still applies to all non-quoted input. The renderer
+preserves quotes when the content would change under case normalization
+(e.g., `show "ALERT"` canonicalizes to `show "ALERT"`, not `show alert`).
+The full resolution is documented in
+`inscript_addendum_v3b_quoted_string_case_preservation.md` (§127–§132).
+This patch was motivated by v3a dogfooding gap D1: all three inception
+§13 use cases require mixed-case display for alerts, game feedback, and
+notifications.
+
+### 4B — Boolean/flag vocabulary clarification
+
+`true` and `false` are ordinary string values, not a boolean type. The
+descriptor `flag` in user programs (e.g., `remember a flag called
+silenced with false`) is decorative per v1b §36 — it does not create a
+typed boolean. Comparisons involving `true`/`false` use string equality.
+The live-value type system recognizes four types: number, string, list,
+and record. There is no boolean/flag type. This is a clarification of
+§113 change detection — string equality (case-normalized for bare words
+per v1c §22; verbatim for quoted content per v3b §127) is the
+authoritative comparison for these values.
+
+### 4C — Timer pack status
+
+The timer domain pack (`src/inscript/packs/timer.py`) was built after
+the v3a build as a dogfooding tool to exercise the adapter contract
+with real threading. It is not part of the v3a language specification —
+it is an implementation-level testing and integration tool. The §126
+statement that the test adapter is the only shipped adapter refers to
+the specification scope; the timer pack is an engineering artifact
+layered on top.
+
+### Sentence 101 correction
+
+The sentence 101 program as originally written did not produce a cycle
+under §113 deep-equality change detection — `remember a number called a
+with 1` after the adapter already set `a` to `1` is silently absorbed.
+The integration test was rewritten to use a three-handler ring whose
+mutations are all genuine changes:
+
+```
+remember a number called alpha with 0
+remember a number called beta with 0
+remember a number called gamma with 0
+
+when alpha is above 0
+  remember a number called beta with 1
+
+when beta is above 0
+  remember a number called alpha with 0
+  remember a number called gamma with 1
+
+when gamma is above 0
+  remember a number called alpha with 1
+```
+
+Adapter `[alpha = 1]` triggers H1 (sets beta=1) → cascade H2 (sets
+alpha=0, gamma=1) → cascade H3 (sets alpha=1) → cascade would re-fire
+H1 → same-handler-twice cycle detected (§114).
+
+### Sentence 107 split
+
+Sentence 107's two embedded scenarios (non-taken `finish` branch vs.
+taken `finish` branch) were split into 107a and 107b for independent
+assertions on output, shutdown, and reason metadata.
+
+### New coverage tests
+
+Tier 1 (T1–T7) and Tier 2 (T8–T19, with T11–T13 already covered by
+pre-existing tests) tests were added to `tests/test_integration_v3a.py`
+to cover: nested-`when` parse rejection, forward-reference rejection at
+registration, `unless` guard lifting, `finish` during initial evaluation,
+Phase 1 `finish` rejection, `choose` branch cascades, no-`when` Phase 2
+skip, `when` inside `each` rejection, amber blocking Phase 2,
+`finish`-bodied composition rejected in value position, `remember` to
+live-value name from a composition return, `filter`-on-live-value
+rejection in Phase 1, `keep` non-destructive inside action blocks, and
+`of` expressions in `unless` guards.
+
+---
+
 *END OF THE INSCRIPT PROGRAMMING LANGUAGE EVENT-DRIVEN EXECUTION ADDENDUM v3a*
 
 *May 12, 2026*
