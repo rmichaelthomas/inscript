@@ -104,6 +104,12 @@ class Handler:
     index: int
     when_node: WhenNode
     dependencies: frozenset[str]
+    # Source-order, deduped name walk of (condition, unless). Preserves
+    # the order the user wrote so the LISTENING marker reports watching
+    # names in a reading order matching the program. `dependencies` (the
+    # frozenset) is kept for fast `in` lookups and set algebra in §120
+    # adapter-failure handling.
+    dependency_order: tuple[str, ...] = ()
     last_eligibility: bool = False
     disabled: bool = False
 
@@ -118,26 +124,30 @@ class HandlerTable:
     handlers: list[Handler] = field(default_factory=list)
 
     def register(self, when_node: WhenNode) -> Handler:
-        deps = _extract_when_dependencies(when_node)
+        ordered = _extract_when_dependency_order(when_node)
         handler = Handler(
             index=len(self.handlers),
             when_node=when_node,
-            dependencies=deps,
+            dependencies=frozenset(ordered),
+            dependency_order=ordered,
         )
         self.handlers.append(handler)
         return handler
 
     def watching_names(self) -> list[str]:
         """Union of all dependency names across all handlers, in
-        deterministic order. Surfaced in the LISTENING marker (§122)."""
+        registration order. Within a single handler, names appear in
+        source-walk order (condition first, then unless guard). Across
+        handlers, first-seen wins. Surfaced in the LISTENING marker
+        (§122)."""
         seen: set[str] = set()
-        ordered: list[str] = []
+        result: list[str] = []
         for h in self.handlers:
-            for name in sorted(h.dependencies):
+            for name in h.dependency_order:
                 if name not in seen:
                     seen.add(name)
-                    ordered.append(name)
-        return ordered
+                    result.append(name)
+        return result
 
     def dependents_of(self, name: str) -> list[Handler]:
         """Active (non-disabled) handlers that reference `name` in
@@ -166,24 +176,39 @@ def _extract_when_dependencies(when_node: WhenNode) -> frozenset[str]:
       a comparison between values, not lookups during dependency
       extraction.
     """
-    deps: set[str] = set()
-    _walk_dependencies(when_node.condition, deps)
+    return frozenset(_extract_when_dependency_order(when_node))
+
+
+def _extract_when_dependency_order(when_node: WhenNode) -> tuple[str, ...]:
+    """Like `_extract_when_dependencies` but preserves first-encounter
+    order across a left-to-right walk of (condition, unless). Used by
+    `HandlerTable.watching_names` (§122) so the LISTENING marker
+    reports names in the order the user wrote them."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    _walk_dependencies(when_node.condition, seen, ordered)
     if when_node.unless is not None:
-        _walk_dependencies(when_node.unless, deps)
-    return frozenset(deps)
+        _walk_dependencies(when_node.unless, seen, ordered)
+    return tuple(ordered)
 
 
-def _walk_dependencies(node: ASTNode, deps: set[str]) -> None:
+def _walk_dependencies(
+    node: ASTNode, seen: set[str], ordered: list[str],
+) -> None:
     if isinstance(node, ConditionNode):
-        _walk_dependencies(node.field, deps)
-        _walk_dependencies(node.value, deps)
+        _walk_dependencies(node.field, seen, ordered)
+        _walk_dependencies(node.value, seen, ordered)
     elif isinstance(node, CompoundConditionNode):
-        _walk_dependencies(node.left, deps)
-        _walk_dependencies(node.right, deps)
+        _walk_dependencies(node.left, seen, ordered)
+        _walk_dependencies(node.right, seen, ordered)
     elif isinstance(node, NameRef):
-        deps.add(node.name)
+        if node.name not in seen:
+            seen.add(node.name)
+            ordered.append(node.name)
     elif isinstance(node, FieldAccessNode):
-        deps.add(node.record_name)
+        if node.record_name not in seen:
+            seen.add(node.record_name)
+            ordered.append(node.record_name)
     # Literals (NumberLiteral, BareWord, QuotedString, EachPronoun)
     # contribute no dependencies — they evaluate to themselves.
 

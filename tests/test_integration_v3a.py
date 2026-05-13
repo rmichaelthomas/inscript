@@ -498,7 +498,7 @@ def test_sentence_111_no_adapters_auto_shutdown():
     assert handler_fires[0].output == ["yes"]
     shutdown = [r for r in results if r.status is ResultStatus.SHUTDOWN][0]
     assert shutdown.metadata["reason"] == "no_adapters"
-    assert "No event sources" in shutdown.output[0]
+    assert "no event sources" in shutdown.output[0].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -936,3 +936,257 @@ def test_t19_of_expression_in_unless_guard():
     )
     output_lines = outputs(results)
     assert "alert" in output_lines
+
+
+# ===========================================================================
+# U1 / U2 / U3 — CLI display improvements (May 13, 2026)
+# ===========================================================================
+
+import io as _io
+from inscript.cli import Session as _Session, display_result as _display_result
+from inscript.cli import _consume_when_block as _consume_when_block  # type: ignore
+
+
+def _render_v3a(source: str, *, pack=None, quiet: bool = True) -> str:
+    """Drive a v3a program through the real CLI display path and return
+    captured stdout. Used by the U1/U2/U3 tests to assert on the actual
+    user-visible output, not just the structured result stream."""
+    import textwrap
+    from inscript.lexer import leading_indent, LexError, tokenize
+    from inscript.listener import listen
+    from inscript.result import InscriptResult, ResultStatus as _RS
+    from inscript.vocabulary import TokenType as _TT
+
+    source = textwrap.dedent(source).strip("\n")
+    session = _Session(domain_packs=[pack] if pack else None)
+    buf = _io.StringIO()
+    write = buf.write
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            if quiet:
+                write("\n")
+            i += 1
+            continue
+        try:
+            indent = leading_indent(line)
+        except LexError as e:
+            err = InscriptResult(
+                status=_RS.ERROR_PARSE, message=e.message, executed=False,
+            )
+            _display_result(err, session, quiet=quiet, out=buf)
+            session.record_result(err)
+            i += 1
+            continue
+        is_when = False
+        if indent == 0:
+            try:
+                toks = tokenize(line)
+            except LexError:
+                toks = []
+            if (
+                toks
+                and toks[0].type is _TT.CONNECTIVE
+                and toks[0].value == "when"
+            ):
+                is_when = True
+        if is_when:
+            i = _consume_when_block(
+                lines, i, session,
+                auto_confirm_amber=True, quiet=quiet, out=buf, write=write,
+            )
+            continue
+        r = session.run_line(line)
+        _display_result(r, session, quiet=quiet, out=buf)
+        session.record_result(r)
+        i += 1
+
+    if session.handler_table.is_empty() or session.phase1_had_error:
+        return buf.getvalue()
+    for r in listen(
+        session.symtab,
+        session.handler_table,
+        session.live_value_registry,
+        session.adapters(),
+    ):
+        _display_result(r, session, quiet=quiet, out=buf)
+    return buf.getvalue()
+
+
+def test_u1_handler_fire_does_not_print_canonical_preview():
+    """U1: HANDLER_FIRE outputs must not display 'I understand this as:'
+    — that prefix is reserved for Phase 1 canonical previews."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("temperature", 105), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called temperature with 0
+        when temperature is above 100
+          show "alert"
+        """,
+        pack=pack,
+    )
+    # The action-block's output line itself must NOT carry the Phase-1
+    # canonical preview.
+    assert "I understand this as: show" not in text
+    assert "alert" in text
+
+
+def test_u2_adapter_update_tag_shows_name_and_value():
+    """U2: an adapter_update-triggered firing tags its first output
+    line with the changed name and new value."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("temperature", 150), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called temperature with 0
+        when temperature is above 100
+          show "warning: elevated"
+        """,
+        pack=pack,
+    )
+    assert "[temperature → 150] warning: elevated" in text
+
+
+def test_u2_initial_evaluation_tag():
+    """U2: initial-evaluation firings tag with `[initial]`."""
+    text = _render_v3a(
+        """
+        remember a number called level with 75
+        when level is above 50
+          show "high"
+        """,
+    )
+    assert "[initial] high" in text
+
+
+def test_u2_cascade_tag_lists_changed_names():
+    """U2: cascade firings tag with `[cascade: <names> changed]`."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("temperature", 105), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called temperature with 0
+        remember a string called alert with none
+        when temperature is above 100
+          remember a string called alert with triggered
+        when alert is equal to triggered
+          show "cascade fired"
+        """,
+        pack=pack,
+    )
+    assert "[cascade: alert changed] cascade fired" in text
+
+
+def test_u2_multi_statement_action_block_tags_first_line_only():
+    """U2: across multiple output-producing statements in one firing,
+    the trigger tag appears only on the first line."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("level", 75), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called level with 0
+        when level is above 50
+          show "first"
+          show "second"
+        """,
+        pack=pack,
+    )
+    assert "[level → 75] first" in text
+    assert "[level → 75] second" not in text
+    # The second statement is bare, no tag prefix.
+    assert "\nsecond\n" in text
+
+
+def test_u3_shutdown_reason_finish_message():
+    """U3: shutdown via `finish` uses the reason-specific message."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("level", 75), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called level with 0
+        when level is above 50
+          finish
+        """,
+        pack=pack,
+    )
+    assert "Listener stopped: finish called." in text
+
+
+def test_u3_shutdown_reason_adapter_complete_message():
+    """U3: shutdown via adapter completion uses the matching message."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=[("level", 75), "[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called level with 0
+        when level is above 50
+          show "ok"
+        """,
+        pack=pack,
+    )
+    assert "Listener stopped: all event sources completed." in text
+
+
+def test_u3_shutdown_reason_no_adapters_message():
+    """U3: auto-shutdown with no adapters uses the matching message."""
+    text = _render_v3a(
+        """
+        remember a number called level with 75
+        when level is above 50
+          show "ok"
+        """,
+    )
+    assert "Listener stopped: no event sources registered." in text
+
+
+def test_u3_watching_list_in_registration_order():
+    """U3: the LISTENING marker reports watched names in source-walk
+    registration order (the order handlers were encountered and the
+    order names appeared within each handler), not alphabetical."""
+    pack = TestDomainPack(
+        declarations=[],
+        script=["[done]"],
+        name="t",
+    )
+    text = _render_v3a(
+        """
+        remember a number called systolic with 0
+        remember a string called medication-given with false
+        remember a number called heart-rate with 0
+        remember a string called alert-level with none
+        when systolic is above 140 unless medication-given is equal to true
+          show "x"
+        when heart-rate is above 120
+          show "y"
+        when alert-level is equal to critical
+          show "z"
+        """,
+        pack=pack,
+    )
+    expected = (
+        "Listening for changes to: systolic, medication-given, "
+        "heart-rate, alert-level"
+    )
+    assert expected in text
+

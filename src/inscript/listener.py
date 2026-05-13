@@ -601,21 +601,21 @@ class _Runner:
             meta["handler_index"] = self.finish_handler_index
         return InscriptResult(
             status=ResultStatus.SHUTDOWN,
-            output=["Program stopped."],
+            output=["Listener stopped: finish called."],
             metadata=meta,
         )
 
     def _shutdown_adapter_complete(self) -> InscriptResult:
         return InscriptResult(
             status=ResultStatus.SHUTDOWN,
-            output=["All event sources finished. Listener mode complete."],
+            output=["Listener stopped: all event sources completed."],
             metadata={"reason": "adapter_complete"},
         )
 
     def _shutdown_no_adapters(self) -> InscriptResult:
         return InscriptResult(
             status=ResultStatus.SHUTDOWN,
-            output=["No event sources registered. Initial evaluation complete."],
+            output=["Listener stopped: no event sources registered."],
             metadata={"reason": "no_adapters"},
         )
 

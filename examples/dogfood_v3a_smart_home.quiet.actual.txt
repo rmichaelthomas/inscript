@@ -3,10 +3,10 @@
 
 
 
-Listening for changes to: occupancy, light-level, mode, lights
-lights turned on
-light status: on
-lights turned off
-lights turned on
-light status: on
-All event sources finished. Listener mode complete.
+Listening for changes to: occupancy, mode, light-level, lights
+[light-level → 150] lights turned on
+[cascade: lights changed] light status: on
+[cascade: mode changed] lights turned off
+[cascade: mode changed] lights turned on
+[cascade: lights changed] light status: on
+Listener stopped: all event sources completed.

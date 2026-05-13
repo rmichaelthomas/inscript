@@ -1,7 +1,7 @@
-=== v3a: phase 1 setup ===
+=== v3a: Phase 1 setup ===
 
 
-=== v3a: registering handlers (no output until phase 2) ===
+=== v3a: registering handlers (no output until Phase 2) ===
 
 
 
@@ -10,9 +10,9 @@
 
 
 Listening for changes to: ready-flag, level, patient, alert-mode
-system initialized
-level crossed 50
-patient escalated
-alarm sounding
-20, 30
-Program stopped.
+[initial] system initialized
+[level → 55] level crossed 50
+[patient → <record with 2 fields>] patient escalated
+[cascade: alert-mode changed] alarm sounding
+[level → 105] 20, 30
+Listener stopped: finish called.

@@ -1,5 +1,5 @@
 
 
 Listening for changes to: tick
-running
-Program stopped.
+[tick → 4] running
+Listener stopped: finish called.

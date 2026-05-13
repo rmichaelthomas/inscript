@@ -3,8 +3,8 @@
 
 
 Listening for changes to: turn, score, game-state
-turn started
-you are winning
-keep going
-victory
-Program stopped.
+[turn → 1] turn started
+[score → 60] you are winning
+[cascade: game-state changed] keep going
+[score → 110] VICTORY
+Listener stopped: finish called.

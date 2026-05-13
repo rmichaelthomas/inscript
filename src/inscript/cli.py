@@ -63,6 +63,12 @@ class Session:
         # (§107) blocks Phase 2. The CLI populates this via run_line's
         # caller — record_result is the integration point.
         self.phase1_had_error: bool = False
+        # U1/U2 — display state for HANDLER_FIRE outputs. Tracks the
+        # most recently-displayed trigger key so the [trigger-tag] prefix
+        # appears once per firing rather than once per action statement.
+        # Reset by display_result whenever a non-HANDLER_FIRE result is
+        # surfaced (so any Phase-1 / shutdown / error line clears it).
+        self._last_trigger_key: tuple | None = None
 
         # Register declared live values from each pack. Names become
         # visible in the symbol table before Phase 1 begins so `when`
@@ -195,6 +201,77 @@ class Session:
 _TRUNCATION_THRESHOLD = 20  # U5: lists longer than this are truncated on auto-show.
 
 
+def _format_trigger_tag(metadata: dict | None) -> str:
+    """U2 — compact tag describing why a handler fired.
+
+    `[initial]`                       initial evaluation (§121)
+    `[name → value]`                  adapter update (single name)
+    `[name1, name2 → ...]`            multi-name adapter update (rare)
+    `[cascade: <names> changed]`     cascaded firing (§114)
+    """
+    if not metadata:
+        return "[handler]"
+    trig = metadata.get("trigger") or {}
+    source = trig.get("source")
+    if source == "initial":
+        return "[initial]"
+    if source == "cascade":
+        changed = trig.get("values_changed") or []
+        if changed:
+            return f"[cascade: {', '.join(changed)} changed]"
+        return "[cascade]"
+    if source == "adapter_update":
+        changed = trig.get("values_changed") or []
+        new = trig.get("new_values") or {}
+        if len(changed) == 1:
+            n = changed[0]
+            v = new.get(n)
+            return f"[{n} → {_format_trigger_value(v)}]"
+        if changed:
+            return f"[{', '.join(changed)} updated]"
+        return "[update]"
+    return f"[{source or 'handler'}]"
+
+
+def _format_trigger_value(value) -> str:
+    """Compact one-line stringification of an adapter-pushed value for
+    the trigger tag. Numbers and short strings pass through; lists and
+    records get a brief shape summary so the tag stays compact."""
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return f"<list of {len(value)}>"
+    if isinstance(value, dict):
+        return f"<record with {len(value)} field{'s' if len(value) != 1 else ''}>"
+    return repr(value)
+
+
+def _trigger_key(metadata: dict | None) -> tuple:
+    """Key used to detect "same firing, next statement" — equal across
+    every action-statement result in a single handler firing, distinct
+    across cascaded firings (cascade source flips even when the index
+    matches a prior firing)."""
+    if not metadata:
+        return ()
+    trig = metadata.get("trigger") or {}
+    return (
+        trig.get("source"),
+        trig.get("handler_index"),
+        tuple(trig.get("values_changed") or ()),
+    )
+
+
+_SHUTDOWN_MESSAGES = {
+    "finish": "Listener stopped: finish called.",
+    "adapter_complete": "Listener stopped: all event sources completed.",
+    "no_adapters": "Listener stopped: no event sources registered.",
+    "error": "Listener stopped: error (see above).",
+    "external": "Listener stopped: interrupted.",
+}
+
+
 def _is_auto_shown(canonical: str | None) -> bool:
     """U5: only auto-show outputs are subject to truncation.
 
@@ -253,7 +330,17 @@ def display_result(
         return
     write = (out.write if out is not None else lambda s: print(s, end=""))
 
-    if result.canonical and not _suppress_canonical and not quiet:
+    # U1: HANDLER_FIRE is a Phase 2 reactive firing, not a Phase 1
+    # canonical confirmation — suppress the "I understand this as: …"
+    # echo for those results entirely. Other listener-mode statuses
+    # (LISTENING / SHUTDOWN / ERROR_RUNTIME) never carry a canonical, so
+    # they're unaffected.
+    if (
+        result.canonical
+        and not _suppress_canonical
+        and not quiet
+        and result.status is not ResultStatus.HANDLER_FIRE
+    ):
         write(f"I understand this as: {result.canonical}\n")
 
     if result.status is ResultStatus.SUCCESS:
@@ -293,6 +380,7 @@ def display_result(
 
     # v3a §122 — listener-mode statuses.
     if result.status is ResultStatus.LISTENING:
+        session._last_trigger_key = None
         watching = (result.metadata or {}).get("watching", [])
         if watching:
             write(f"Listening for changes to: {', '.join(watching)}\n")
@@ -300,24 +388,43 @@ def display_result(
             write("Listening for changes.\n")
         return
     if result.status is ResultStatus.HANDLER_FIRE:
-        # v3a §122: HANDLER_FIRE wraps each successful action-block
-        # statement result. The output is displayed identically to
-        # SUCCESS.
+        # v3a §122 + U1/U2: HANDLER_FIRE wraps each successful action-
+        # block statement result. The first output line of each distinct
+        # firing is prefixed with a compact trigger tag (U2). Subsequent
+        # statements in the same firing — same trigger key — omit the
+        # tag so multi-statement action blocks read as a single grouped
+        # event.
         if result.output:
             lines = (
                 _maybe_truncate(result.output)
                 if _is_auto_shown(result.canonical)
                 else result.output
             )
-            for line in lines:
-                write(f"{line}\n")
+            key = _trigger_key(result.metadata)
+            for idx, line in enumerate(lines):
+                if idx == 0 and key != session._last_trigger_key:
+                    tag = _format_trigger_tag(result.metadata)
+                    write(f"{tag} {line}\n")
+                    session._last_trigger_key = key
+                else:
+                    write(f"{line}\n")
         return
     if result.status is ResultStatus.SHUTDOWN:
-        if result.output:
+        # U3 — derive the exit-reason wording from metadata.reason so the
+        # user sees WHY listener mode ended (finish vs adapter completion
+        # vs error vs interrupt). The listener's `output` field is kept
+        # for back-compat but the metadata-driven message is authoritative.
+        session._last_trigger_key = None
+        reason = (result.metadata or {}).get("reason")
+        message = _SHUTDOWN_MESSAGES.get(reason)
+        if message is not None:
+            write(f"{message}\n")
+        elif result.output:
             for line in result.output:
                 write(f"{line}\n")
         return
     if result.status is ResultStatus.ERROR_RUNTIME:
+        session._last_trigger_key = None
         write(f"Error: {result.message}\n")
         return
 

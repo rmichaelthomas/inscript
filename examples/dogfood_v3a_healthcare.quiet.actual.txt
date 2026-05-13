@@ -2,9 +2,9 @@
 
 
 
-Listening for changes to: medication-given, systolic, heart-rate, alert-level
-warning: elevated blood pressure
-alert: blood pressure critical
-warning: tachycardia detected
-emergency: compound cardiovascular event
-Program stopped.
+Listening for changes to: systolic, medication-given, heart-rate, alert-level
+[systolic → 150] warning: elevated blood pressure
+[systolic → 185] ALERT: blood pressure critical
+[heart-rate → 130] warning: tachycardia detected
+[heart-rate → 130] EMERGENCY: compound cardiovascular event
+Listener stopped: finish called.
