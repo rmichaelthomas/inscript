@@ -30,7 +30,16 @@ import json
 import sys
 from pathlib import Path
 
-from .adapter import DomainPack, LiveValueRegistry, TestDomainPack
+from .adapter import (
+    DomainPack,
+    LiveValueRegistry,
+    TestDomainPack,
+    parse_pack_verb_signature,
+)
+from .vocabulary import (
+    activate_pack_words,
+    deactivate_all_pack_words,
+)
 from .analyzer import SymbolEntry
 from .interpreter import HandlerTable, execute
 from .lexer import LexError, leading_indent, tokenize
@@ -69,6 +78,17 @@ class Session:
         # Reset by display_result whenever a non-HANDLER_FIRE result is
         # surfaced (so any Phase-1 / shutdown / error line clears it).
         self._last_trigger_key: tuple | None = None
+
+        # v4a §137: pack vocabulary (verbs + nouns) is process-global
+        # state. Reset before activating this Session's packs so the
+        # active vocabulary always reflects the current Session, not a
+        # leftover from an earlier one.
+        deactivate_all_pack_words()
+        for pack in self.domain_packs:
+            verbs = pack.verbs()
+            nouns = [w for (w, cat) in pack.vocabulary() if cat == "noun"]
+            if verbs or nouns:
+                activate_pack_words(verbs=verbs, nouns=nouns)
 
         # Register declared live values from each pack. Names become
         # visible in the symbol table before Phase 1 begins so `when`
@@ -717,10 +737,26 @@ def _make_test_pack(
                 f"malformed sequence entry {entry!r} — each entry must "
                 f"be ['name', value] or '[done]'."
             )
+    # v4a §137: optional pack vocabulary and verb signatures. Packs
+    # without these keys load exactly as before (backward-compatible).
+    vocabulary: list[tuple[str, str]] = []
+    for entry in config.get("vocabulary", []):
+        if isinstance(entry, dict):
+            vocabulary.append((entry["word"], entry.get("category", "noun")))
+        elif isinstance(entry, list) and len(entry) == 2:
+            vocabulary.append((entry[0], entry[1]))
+        else:
+            raise ValueError(
+                f"malformed vocabulary entry {entry!r} — each entry must "
+                f"be {{'word', 'category'}} or [word, category]."
+            )
+    verbs = [parse_pack_verb_signature(v) for v in config.get("verbs", [])]
     return TestDomainPack(
         declarations=declarations,
         script=script,
         name=config.get("name", default_name),
+        vocabulary=vocabulary,
+        verbs=verbs,
     )
 
 

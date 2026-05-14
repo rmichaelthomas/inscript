@@ -69,6 +69,7 @@ from .parser import (
     KeepNode,
     NameRef,
     NumberLiteral,
+    PackVerbNode,
     QuotedString,
     RememberCompositionNode,
     RememberListNode,
@@ -503,6 +504,8 @@ def _exec_op(
         return _exec_choose(node, symtab, current_item)
     if isinstance(node, CompositionCallNode):
         return _exec_composition_call(node, symtab)
+    if isinstance(node, PackVerbNode):
+        return _exec_pack_verb(node, symtab)
     if isinstance(node, FinishNode):
         # v3a §112 — immediate and total. The exception unwinds out of
         # any surrounding choose/sequence/composition straight to the
@@ -588,8 +591,51 @@ def _exec_remember_record(
         value=fields,
         type="record",
         schema=schema,
+        descriptor=node.descriptor,
     )
     return []
+
+
+# ---------------------------------------------------------------------------
+# v4a §137 — pack verb dispatch
+# ---------------------------------------------------------------------------
+
+
+def _exec_pack_verb(
+    node: PackVerbNode,
+    symtab: dict[str, SymbolEntry],
+) -> list[str]:
+    """Dispatch a pack-defined verb by its execution type.
+
+    v4a defines exactly one execution type — `set_value` — which writes
+    the source slot's resolved name into a symbol named `target_name`.
+    The analyzer has already validated slot values and type constraints,
+    so the dispatch can assume well-formed inputs.
+    """
+    execution = node.signature.execution
+    if execution.type == "set_value":
+        slot_name = execution.source_slot
+        target_name = execution.target_name
+        if slot_name is None or target_name is None:
+            raise _RuntimeError(
+                f"Pack verb '{node.word}' has an incomplete set_value "
+                f"execution definition."
+            )
+        value_node = node.slot_values.get(slot_name)
+        if value_node is None:
+            raise _RuntimeError(
+                f"Pack verb '{node.word}' is missing its '{slot_name}' slot."
+            )
+        if isinstance(value_node, NameRef):
+            value: Any = value_node.name
+        else:
+            value = _evaluate_expression(value_node, symtab, None)
+        _store(symtab, target_name, value)
+        return []
+    raise _RuntimeError(
+        f"Pack verb '{node.word}' uses unknown execution type "
+        f"'{execution.type}'."
+    )
 
 
 def _exec_remember_composition(
