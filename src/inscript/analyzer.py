@@ -65,6 +65,7 @@ from .parser import (
     KeepNode,
     NameRef,
     NumberLiteral,
+    PackVerbNode,
     QuotedString,
     RememberCompositionNode,
     RememberListNode,
@@ -90,6 +91,13 @@ class SymbolEntry:
     value: Any
     type: str   # see _TYPE_NAMES below
     schema: dict[str, str] | None = None  # records only
+    # v4a §137: the descriptor word the user wrote between article and
+    # `called` at definition time (e.g. "screen" in `remember a screen
+    # called dashboard ...`). Preserved so pack verb type constraints can
+    # check it (§135 — `navigate to` expects a record whose descriptor is
+    # `screen`). None when no descriptor was written or when the entry is
+    # not user-defined.
+    descriptor: str | None = None
     # For list_of_records: the source-record names captured at list
     # construction. Populated when the list was built via
     # `remember a list with X and Y and Z` where each item was a name
@@ -272,6 +280,11 @@ def _check(
         # time. The action block itself is not analyzed here — name
         # resolution within actions is deferred to firing time (§111).
         _check_when(node, symtab)
+    elif isinstance(node, PackVerbNode):
+        # v4a §137 — type-constraint checking per slot. Pack verbs do
+        # their semantic validation here; the interpreter dispatches by
+        # execution type.
+        _check_pack_verb(node, symtab)
     elif isinstance(node, FinishNode):
         # v3a §112: `finish` is legal only inside a `when` action block
         # (directly, in a `choose` branch, or in a composition called
@@ -1057,6 +1070,56 @@ def _check_when(
     _check_choose_condition(node.condition, symtab)
     if node.unless is not None:
         _check_choose_condition(node.unless, symtab)
+
+
+def _check_pack_verb(
+    node: PackVerbNode,
+    symtab: dict[str, SymbolEntry],
+) -> None:
+    """v4a §137 — validate each filled slot against its `type_constraint`.
+
+    For each slot with a constraint:
+      1. The slot value must resolve to a name (parser enforces; defensive
+         check here).
+      2. The name must exist in the symbol table.
+      3. If the constraint matches a built-in type name (e.g. "number"),
+         the symbol's type must equal it. Otherwise the constraint is
+         treated as a descriptor — the symbol must be a record whose
+         descriptor matches case-insensitively.
+    """
+    for slot in node.signature.slots:
+        if slot.name not in node.slot_values:
+            continue
+        value_node = node.slot_values[slot.name]
+        if not isinstance(value_node, NameRef):
+            raise _SemanticError(
+                f"'{node.word} {slot.connective}' expects a name."
+            )
+        name = value_node.name
+        if name not in symtab:
+            raise _SemanticError(
+                f"I can't find '{name}'. "
+                f"You might need to 'remember' it first."
+            )
+        if slot.type_constraint is None:
+            continue
+        entry = symtab[name]
+        constraint = slot.type_constraint
+        # The constraint is a descriptor — the symbol must be a record
+        # whose descriptor matches. Non-record types report their type
+        # (per spec sentence 120: "'counter' is a number, not a screen").
+        if entry.type != "record":
+            raise _SemanticError(
+                f"'{name}' is {_singular(entry.type)}, not a {constraint}. "
+                f"'{node.word} {slot.connective}' expects a {constraint}."
+            )
+        descriptor = (entry.descriptor or "").lower()
+        if descriptor != constraint.lower():
+            shown = entry.descriptor if entry.descriptor else "a record"
+            raise _SemanticError(
+                f"'{name}' is a {shown}, not a {constraint}. "
+                f"'{node.word} {slot.connective}' expects a {constraint}."
+            )
 
 
 def _check_finish(

@@ -57,6 +57,7 @@ from .vocabulary import (
     Token,
     TokenType,
     VERBS,
+    active_pack_verb_words,
 )
 
 _DECORATIVE = ",.?!"
@@ -223,6 +224,11 @@ def _classify(cleaned: list[tuple[str, int, bool]]) -> list[Token]:
             continue
 
         if word in VERBS:
+            tokens.append(Token(TokenType.VERB, word, pos))
+        elif word in active_pack_verb_words():
+            # v4a §137: pack-defined verbs are classified as VERB tokens
+            # while the pack is loaded. The parser dispatches them after
+            # the base verbs.
             tokens.append(Token(TokenType.VERB, word, pos))
         elif word in CONNECTIVES:
             tokens.append(Token(TokenType.CONNECTIVE, word, pos))

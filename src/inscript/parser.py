@@ -40,8 +40,10 @@ from typing import Any
 
 from .result import InscriptResult, ResultStatus
 from .vocabulary import (
+    PackVerbSignature,
     Token,
     TokenType,
+    get_active_pack_verb,
     reserved_category,
 )
 
@@ -270,6 +272,23 @@ class WhenNode(ASTNode):
     condition: ASTNode
     unless: ASTNode | None
     action: ASTNode
+
+
+@dataclass
+class PackVerbNode(ASTNode):
+    """v4a §137 — a call to a pack-defined verb.
+
+    `word` is the verb name as written. `signature` carries the verb's
+    slot signature and execution definition (from the pack JSON), so the
+    analyzer and interpreter can validate and dispatch without consulting
+    the pack registry a second time. `slot_values` maps each filled
+    slot's `name` to the AST value parsed for that slot (typically a
+    NameRef per v4a; the dataclass is permissive so future packs can
+    accept literals).
+    """
+    word: str
+    signature: PackVerbSignature
+    slot_values: dict[str, ASTNode] = field(default_factory=dict)
 
 
 @dataclass
@@ -635,7 +654,81 @@ def _parse_verb_statement(stream: TokenStream, comp: set[str]) -> ASTNode:
         # we just parse the leaf node. `finish` may legitimately appear
         # in composition bodies (analyzer defers the error to call time).
         return FinishNode()
+    # v4a §137 — pack-defined verb dispatch comes after the base verbs.
+    pack_sig = get_active_pack_verb(verb.value)
+    if pack_sig is not None:
+        return _parse_pack_verb(stream, pack_sig)
     raise _ParseError(f"Unknown verb '{verb.value}'.")
+
+
+# ---------------------------------------------------------------------------
+# v4a §137 — pack verb parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_pack_verb(
+    stream: TokenStream, sig: PackVerbSignature,
+) -> PackVerbNode:
+    """Fill the pack verb's slots in source order.
+
+    For each slot: expect the slot's connective followed by a value
+    token (single UNKNOWN name → NameRef). Missing required slots, wrong
+    connectives, or non-name values produce parse errors. v4a's only
+    pack verb (`navigate`) has a single required slot, but the loop is
+    general so additional packs work without parser changes.
+    """
+    slot_values: dict[str, ASTNode] = {}
+    for slot in sig.slots:
+        peek = stream.peek()
+        if not (
+            peek
+            and peek.type is TokenType.CONNECTIVE
+            and peek.value == slot.connective
+        ):
+            if slot.required:
+                raise _ParseError(_pack_verb_missing_slot_error(sig, slot))
+            continue
+        stream.consume()  # eat the connective
+        value_tok = stream.consume()
+        if value_tok is None:
+            raise _ParseError(_pack_verb_missing_slot_error(sig, slot))
+        if value_tok.type is TokenType.QUOTED_STRING:
+            raise _ParseError(
+                f"Names can't have spaces. Try a hyphenated name like "
+                f"'{_hyphenate(value_tok.value)}' instead."
+            )
+        if value_tok.type is not TokenType.UNKNOWN:
+            cat = reserved_category(value_tok.value)
+            if cat:
+                raise _ParseError(
+                    f"The word '{value_tok.value}' is reserved in Inscript "
+                    f"— it's used as a {cat}. Please use a name you've "
+                    f"created."
+                )
+            raise _ParseError(
+                f"I expected a name after '{sig.word} {slot.connective}', "
+                f"not '{value_tok.value}'."
+            )
+        slot_values[slot.name] = NameRef(name=value_tok.value)
+    return PackVerbNode(word=sig.word, signature=sig, slot_values=slot_values)
+
+
+def _pack_verb_missing_slot_error(
+    sig: PackVerbSignature, slot,
+) -> str:
+    """Generate the missing-slot error for a pack verb. The phrasing is
+    tuned for the most common shape — `<verb> <connective> <target>` —
+    so v4a's `navigate to <screen-name>` produces the exact error wording
+    locked in §140.
+    """
+    constraint = slot.type_constraint or "value"
+    # Friendly slot role: `to <X>` reads as a destination; other
+    # connectives fall back to the slot name.
+    role = "destination" if slot.connective == "to" else slot.name
+    return (
+        f"'{sig.word}' needs a {role} — try: "
+        f"{sig.word} {slot.connective} <{constraint}-name>."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1529,6 +1622,15 @@ def _consume_name(stream: TokenStream, *, after: str) -> str:
                 f"it's used as a {cat}. Please choose a different name."
             )
         raise _ParseError(f"I expected a name after {after}, not '{tok.value}'.")
+    # v4a §137: pack-reserved words (active pack nouns) remain UNKNOWN
+    # tokens because they are not base vocabulary, but they must still be
+    # rejected in name positions while their pack is loaded.
+    cat = reserved_category(tok.value)
+    if cat:
+        raise _ParseError(
+            f"The word '{tok.value}' is reserved in Inscript — "
+            f"it's used as a {cat}. Please choose a different name."
+        )
     return tok.value
 
 

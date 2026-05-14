@@ -41,6 +41,7 @@ from .parser import (
     KeepNode,
     NameRef,
     NumberLiteral,
+    PackVerbNode,
     QuotedString,
     RememberCompositionNode,
     RememberListNode,
@@ -167,6 +168,17 @@ def render(node: ASTNode) -> str:
     if isinstance(node, FinishNode):
         # v3a §112: `finish` is the verb leaf — no slots, no decoration.
         return "finish"
+
+    if isinstance(node, PackVerbNode):
+        # v4a §137: pack verbs render as `<word> [<conn> <value>]...` in
+        # slot order. Empty optional slots are skipped.
+        parts: list[str] = [node.word]
+        for slot in node.signature.slots:
+            if slot.name not in node.slot_values:
+                continue
+            parts.append(slot.connective)
+            parts.append(render(node.slot_values[slot.name]))
+        return " ".join(parts)
 
     if isinstance(node, ConditionNode):
         return _render_condition(node)

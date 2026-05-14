@@ -1,0 +1,10 @@
+-- v4a navigate verb smoke test. Loaded with --pack examples/pack_ui.json.
+
+remember a screen called dashboard with title as "Orders"
+remember a screen called settings with title as "Settings"
+
+navigate to dashboard
+show current-screen
+
+navigate to settings
+show current-screen

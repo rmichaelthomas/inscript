@@ -27,6 +27,12 @@ from dataclasses import dataclass, field
 from queue import Queue
 from typing import Any
 
+from .vocabulary import (
+    PackVerbExecution,
+    PackVerbSignature,
+    PackVerbSlot,
+)
+
 
 # ---------------------------------------------------------------------------
 # Declarations and queue messages (§116)
@@ -159,6 +165,63 @@ class DomainPack(ABC):
         declared live values."""
         raise NotImplementedError
 
+    # v4a §137 — optional pack contributions to the active vocabulary.
+    # Default to empty so existing packs (which override only the three
+    # required methods above) keep working unchanged. Backward-compatible.
+
+    def vocabulary(self) -> list[tuple[str, str]]:
+        """Pack-contributed vocabulary as `(word, category)` pairs. v4a
+        only consumes the noun category; other categories are reserved
+        for future extension."""
+        return []
+
+    def verbs(self) -> list[PackVerbSignature]:
+        """Pack-contributed verbs and their slot signatures (v4a §137).
+        Empty by default."""
+        return []
+
+
+# ---------------------------------------------------------------------------
+# v4a §137 — JSON pack verb deserialization helper
+# ---------------------------------------------------------------------------
+
+
+def parse_pack_verb_signature(definition: dict) -> PackVerbSignature:
+    """Convert a single JSON `verbs[]` entry into a PackVerbSignature.
+
+    The JSON schema (§137):
+      {
+        "word": "<verb-name>",
+        "slots": [
+          {"name": "...", "connective": "...", "required": true,
+           "type_constraint": "..."}
+        ],
+        "execution": {"type": "set_value", "target_name": "...",
+                      "source_slot": "..."}
+      }
+    """
+    word = definition["word"]
+    raw_slots = definition.get("slots", [])
+    slots: list[PackVerbSlot] = []
+    for s in raw_slots:
+        slots.append(
+            PackVerbSlot(
+                name=s["name"],
+                connective=s["connective"],
+                required=bool(s.get("required", True)),
+                type_constraint=s.get("type_constraint"),
+            )
+        )
+    exec_def = definition.get("execution") or {}
+    execution = PackVerbExecution(
+        type=exec_def.get("type", ""),
+        target_name=exec_def.get("target_name"),
+        source_slot=exec_def.get("source_slot"),
+    )
+    return PackVerbSignature(
+        word=word, slots=tuple(slots), execution=execution,
+    )
+
 
 # ---------------------------------------------------------------------------
 # TestAdapter / TestDomainPack — the v3a-shipped test surface (§118)
@@ -251,6 +314,8 @@ class TestDomainPack(DomainPack):
         script: list[tuple[str, Any] | str],
         *,
         name: str = "test-pack",
+        vocabulary: list[tuple[str, str]] | None = None,
+        verbs: list[PackVerbSignature] | None = None,
     ):
         self._name = name
         self._declarations: list[LiveValueDeclaration] = [
@@ -260,6 +325,8 @@ class TestDomainPack(DomainPack):
         ]
         self._script = script
         self._adapter: TestAdapter | None = None
+        self._vocabulary: list[tuple[str, str]] = list(vocabulary or [])
+        self._verbs: list[PackVerbSignature] = list(verbs or [])
 
     def name(self) -> str:
         return self._name
@@ -271,6 +338,12 @@ class TestDomainPack(DomainPack):
         if self._adapter is None:
             self._adapter = TestAdapter(self._script, name=self._name)
         return self._adapter
+
+    def vocabulary(self) -> list[tuple[str, str]]:
+        return list(self._vocabulary)
+
+    def verbs(self) -> list[PackVerbSignature]:
+        return list(self._verbs)
 
 
 # ---------------------------------------------------------------------------

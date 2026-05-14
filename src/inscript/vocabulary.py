@@ -13,6 +13,10 @@ Sources:
 - v3a §112 (`finish` verb — exits listener mode immediately)
 - v3a §108/§109 (`when`/`unless` connectives — promoted from V2_RESERVED)
 - v3a §124 (updated vocabulary: 10 verbs, 14 connectives, 34 reserved words)
+- v4a §137 (general-purpose pack verb contract — packs register verbs with
+  slot signatures via JSON; pack words add to the active vocabulary on
+  activation and are removed on deactivation; the base vocabulary stays
+  permanently at 34 reserved words.)
 """
 
 from dataclasses import dataclass
@@ -102,6 +106,11 @@ def reserved_category(word: str) -> str | None:
     Used by the parser to produce the v1a §29 reserved-word error message:
     "The word '[word]' is reserved in Inscript — it's used as a [category]."
     Returns None if the word is not reserved.
+
+    v4a §137: active pack verbs report as "verb"; active pack nouns
+    report as "noun". Pack words are only reserved while the pack that
+    declared them is loaded — the base vocabulary stays permanently at
+    34 words.
     """
     if word in VERBS:
         return "verb"
@@ -113,7 +122,98 @@ def reserved_category(word: str) -> str | None:
         return "article"
     if word in V2_RESERVED:
         return "reserved word"
+    if word in _ACTIVE_PACK_VERBS:
+        return "verb"
+    if word in _ACTIVE_PACK_NOUNS:
+        return "noun"
     return None
+
+
+# ---------------------------------------------------------------------------
+# v4a §137 — pack verb contract
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PackVerbSlot:
+    """One slot in a pack-defined verb's signature.
+
+    - `name` is the slot's internal identifier (used by execution definitions
+      and in error messages).
+    - `connective` is the connective word that introduces this slot at a
+      call site (e.g. "to" in `navigate to <screen>`).
+    - `required` is True when the slot must be filled.
+    - `type_constraint`, when present, is the descriptor (or type label)
+      the slot's resolved value must match — the semantic analyzer enforces
+      it case-insensitively against the target record's descriptor.
+    """
+    name: str
+    connective: str
+    required: bool
+    type_constraint: str | None = None
+
+
+@dataclass(frozen=True)
+class PackVerbExecution:
+    """v4a §137 execution definition. v4a defines exactly one execution
+    type — `set_value` — which sets `target_name` in the symbol table to
+    the resolved value of `source_slot`."""
+    type: str
+    target_name: str | None = None
+    source_slot: str | None = None
+
+
+@dataclass(frozen=True)
+class PackVerbSignature:
+    word: str
+    slots: tuple[PackVerbSlot, ...]
+    execution: PackVerbExecution
+
+
+# Active pack vocabulary, populated by `activate_pack_words` when a Session
+# registers its domain packs. Mutating module state mirrors how the base
+# VERBS/CONNECTIVES tables work — there's at most one active Session at a
+# time in the CLI driver, and `Session.__init__` resets these tables before
+# (re-)activating its own packs so test runs don't leak state between
+# Sessions.
+_ACTIVE_PACK_VERBS: dict[str, PackVerbSignature] = {}
+_ACTIVE_PACK_NOUNS: set[str] = set()
+
+
+def get_active_pack_verb(word: str) -> PackVerbSignature | None:
+    """Return the signature for `word` if it's an active pack verb."""
+    return _ACTIVE_PACK_VERBS.get(word)
+
+
+def active_pack_verb_words() -> frozenset[str]:
+    return frozenset(_ACTIVE_PACK_VERBS.keys())
+
+
+def active_pack_nouns() -> frozenset[str]:
+    return frozenset(_ACTIVE_PACK_NOUNS)
+
+
+def activate_pack_words(
+    verbs: list[PackVerbSignature] | None = None,
+    nouns: list[str] | None = None,
+) -> None:
+    """Add the given pack verbs and nouns to the active vocabulary
+    (v4a §137 / v1a §29). Each pack contributes additively; the caller
+    decides when to reset via `deactivate_all_pack_words`. Duplicate
+    pack verb registrations (same word) overwrite — packs are vetted
+    by the Session, not by this table."""
+    for sig in verbs or ():
+        _ACTIVE_PACK_VERBS[sig.word] = sig
+    for word in nouns or ():
+        _ACTIVE_PACK_NOUNS.add(word)
+
+
+def deactivate_all_pack_words() -> None:
+    """Clear all pack-contributed vocabulary. Called by `Session.__init__`
+    before (re-)activating its own packs so the active set always reflects
+    the current Session's pack list."""
+    _ACTIVE_PACK_VERBS.clear()
+    _ACTIVE_PACK_NOUNS.clear()
 
 
 # Verb signatures (inception §17, refined by v1b/v1c/v1d). Each verb maps

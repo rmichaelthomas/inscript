@@ -1,0 +1,26 @@
+{
+  "name": "ui",
+  "vocabulary": [
+    { "word": "screen", "category": "noun" },
+    { "word": "button", "category": "noun" },
+    { "word": "input", "category": "noun" },
+    { "word": "text", "category": "noun" },
+    { "word": "list-view", "category": "noun" },
+    { "word": "card", "category": "noun" },
+    { "word": "image", "category": "noun" },
+    { "word": "section", "category": "noun" },
+    { "word": "header", "category": "noun" },
+    { "word": "nav", "category": "noun" }
+  ],
+  "verbs": [
+    {
+      "word": "navigate",
+      "slots": [
+        { "name": "target", "connective": "to", "required": true, "type_constraint": "screen" }
+      ],
+      "execution": { "type": "set_value", "target_name": "current-screen", "source_slot": "target" }
+    }
+  ],
+  "declarations": [],
+  "script": []
+}
