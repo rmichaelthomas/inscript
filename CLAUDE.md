@@ -4,7 +4,7 @@
 
 Inscript is a prose-as-syntax programming language designed by Rob Thomas (R. Michael Thomas). You are the builder. Rob is the architect. All design decisions are locked in the specification documents.
 
-**Current state (May 13, 2026):** v1 interpreter + v2a (`keep` verb, `of` connective, multi-field `each show`, descriptor preservation) + UX polish (`--quiet` flag, named-offender error wording, auto-show truncation) + v2.1-patches (duplicate-field rejection, `of`-on-list suggestion, list-operations-only error) + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings) + v2d (composition parameters with `from`, `choose` verb with `if`/`otherwise`) + v3a (event-driven listener mode: `when`/`unless` connectives, `finish` verb, two-phase execution, indentation-based action blocks, adapter contract, cascading triggers, conservative cycle detection) + **v3b (quoted-string case preservation: lexer no longer folds case inside quotes; renderer adds case-bearing as a third conditional-quoting trigger)**. The Phase 1 pipeline architecture from §8–§9 is unchanged through all extensions; Phase 2 adds a single-threaded event-queue runtime layered on top.
+**Current state (May 13, 2026):** v1 interpreter + v2a (`keep` verb, `of` connective, multi-field `each show`, descriptor preservation) + UX polish (`--quiet` flag, named-offender error wording, auto-show truncation) + v2.1-patches (duplicate-field rejection, `of`-on-list suggestion, list-operations-only error) + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings) + v2d (composition parameters with `from`, `choose` verb with `if`/`otherwise`) + v3a (event-driven listener mode: `when`/`unless` connectives, `finish` verb, two-phase execution, indentation-based action blocks, adapter contract, cascading triggers, conservative cycle detection) + v3b (quoted-string case preservation: lexer no longer folds case inside quotes; renderer adds case-bearing as a third conditional-quoting trigger) + **v4a (general-purpose pack verb contract: packs declare verbs with slot signatures, type constraints, and execution dispatch in JSON; UI domain pack with 10 component nouns and `navigate to <screen-name>`)**. The Phase 1 pipeline architecture from §8–§9 is unchanged through all extensions; Phase 2 adds a single-threaded event-queue runtime layered on top; v4a extends the parser/analyzer/interpreter dispatch tables without changing the base vocabulary. A separate TypeScript port of the validation pipeline (lexer + reorderer + parser + analyzer + renderer; no interpreter) lives in `mobius/packages/inscript-lang/` and validates against this implementation via the 127-sentence sync contract.
 
 ## Critical Rules
 
@@ -48,16 +48,18 @@ Located in `docs/spec/`. Read the relevant section before writing code that touc
 
 - `inscript_addendum_v3b_quoted_string_case_preservation.md` — **LOCKED + IMPLEMENTED.** Patch-shaped addendum. §127 supersedes v2c §91 — quoted-string content is preserved verbatim, including case (`"In Progress"` stores `In Progress`, not `in progress`). The lexer's case-folding step is bypassed inside quoted-content accumulation; everything between quote marks is data. §128 extends v2c §90 with a third conditional-quoting trigger: the renderer emits quotes whenever the stored value differs from its lowercased form, preserving the round-trip property. §129 documents migration impact (programs with all-lowercase quoted content unaffected; mixed-case quoted content now stores verbatim; `where` equality on quoted values is case-sensitive). §130 vocabulary unchanged (still 10/14/34). §131 test sentences 114–117. §132 build boundary extends by two one-line code changes (`lexer.py` `_strip_and_lower`, `renderer.py` `_emit_string`).
 
+- `inscript_addendum_v4a_pack_verbs_and_port.md` — **LOCKED + IMPLEMENTED (Python Phase 1; TypeScript Phase 2 in Möbius monorepo).** §134 UI domain pack vocabulary: 10 nouns (`screen`, `button`, `input`, `text`, `list-view`, `card`, `image`, `section`, `header`, `nav`). §135 `navigate` as pack-level verb (only active with UI pack), slot signature `navigate to <screen-name>`, type constraint `screen`, execution `set_value` writing `current-screen`. §136 component schemas predefined with freeform overflow. §137 general-purpose pack verb contract: packs JSON declares `vocabulary` (noun additions to the reserved list while loaded) and `verbs` (slot signatures with optional `type_constraint` + an `execution` block whose `type` selects dispatch — `set_value` is the first); pack verbs registered as VERB tokens by the lexer, dispatched after base verbs by the parser, type-checked against record descriptors by the analyzer, and executed by the interpreter; backward-compatible with v3a pack JSON (no `verbs` field). §138 TypeScript port scope — `@mobius/inscript-lang` ports lexer/reorderer/parser/analyzer/renderer (NOT interpreter or listener) with the pack verb contract from day one; the 127 sentences are the sync contract. §139 two-phase build (Phase 1 Python + UI pack, Phase 2 TS port). §140 test sentences 118–127. §141 build boundary; v4a does not build Möbius client, proposal engine, tile interface, or interpreter TS port. Vocabulary unchanged: still **10 verbs, 14 connectives, 34 base reserved words**. `SymbolEntry` gains a `descriptor` field populated by `_exec_remember_record` so `navigate to` can check it.
+
 **Test specification:**
 
-- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, 35–48 in v1d §65, 49–59 in v2a §74, 60–68 in v2b §83, 69–80 in v2c §94, 81–95 in v2d §105, 96–113 in v3a §125, 114–117 in v3b §131.
+- `inscript_v1_thirty_sentences.md` — Test specification (sentences 1–30 + design questions). Additional sentences 31–34 in v1c §53, 35–48 in v1d §65, 49–59 in v2a §74, 60–68 in v2b §83, 69–80 in v2c §94, 81–95 in v2d §105, 96–113 in v3a §125, 114–117 in v3b §131, 118–127 in v4a §140.
 
-**Reading order for a fresh session:** inception checkpoint → v1a/v1b/v1c/v1d in order → v2a → v2b → v2c → v2d → v3a → v3b. Each addendum locks decisions on top of all prior; v3b is the first to supersede a sub-decision (v2c §91), with explicit rationale in §127.
+**Reading order for a fresh session:** inception checkpoint → v1a/v1b/v1c/v1d in order → v2a → v2b → v2c → v2d → v3a → v3b → v4a. Each addendum locks decisions on top of all prior; v3b is the first to supersede a sub-decision (v2c §91), with explicit rationale in §127. v4a is the first addendum to extend the pipeline's dispatch tables (parser verb-dispatch, analyzer type-constraint check, interpreter execution dispatch) without changing base vocabulary.
 
 ## Commands
 
 ```bash
-# Run all tests (691 passing as of v3a UX fixes — May 13, 2026)
+# Run all tests (713 passing as of v4a Phase 1 — May 13, 2026)
 pytest tests/ -v
 
 # Run a single module's tests
@@ -90,6 +92,11 @@ python -m inscript examples/dogfood_v3a_event_driven.insc \
 python -m inscript examples/dogfood_v3a_timer_pack.insc \
     --pack '{"type": "timer", "interval_ms": 200, "max_ticks": 5}' --quiet
 
+# v4a UI domain pack — pack-level `navigate to <screen>` verb +
+# 10 component nouns reserved while the pack is loaded.
+python -m inscript --pack examples/pack_ui.json --quiet \
+    examples/dogfood_navigate_test.insc
+
 # Interactive REPL (Phase 1 only — REPL doesn't enter listener mode)
 python -m inscript
 ```
@@ -97,23 +104,34 @@ python -m inscript
 ## Modules (src/inscript/)
 
 - `lexer.py` — tokenizer + `leading_indent` (v3a §110).
-- `vocabulary.py` — verb/connective/operator/article tables.
+- `vocabulary.py` — verb/connective/operator/article tables +
+  `PackVerbSignature`/`PackVerbSlot`/`PackVerbExecution` dataclasses +
+  `activate_pack_words`/`deactivate_all_pack_words` for runtime pack
+  registration (v4a §137).
 - `reorderer.py` — small permutation acceptor (v1d §55).
 - `parser.py` — AST + `parse(tokens)` for single statements +
-  `parse_when_block(header, action_lines)` for v3a §110 blocks.
+  `parse_when_block(header, action_lines)` for v3a §110 blocks +
+  `PackVerbNode` AST + pack-verb dispatch after base verbs (v4a §137).
 - `renderer.py` — canonical prose, including multi-line `when` output.
 - `analyzer.py` — semantic checks + v3a `in_action_block` /
-  `live_value_names` parameters.
+  `live_value_names` parameters + v4a pack-verb type-constraint
+  checking (`_check_pack_verb`) against the record's `descriptor`.
 - `interpreter.py` — Phase 1 execution + `HandlerTable` +
-  `_FinishRequested` exception + ContextVars for listener context.
+  `_FinishRequested` exception + ContextVars for listener context +
+  v4a pack-verb dispatch (`_exec_pack_verb`, currently `set_value`).
 - `listener.py` — Phase 2 generator (`listen(...)`) — initial
   evaluation, event-queue drain, cascading, cycle detection,
   shutdown.
 - `adapter.py` — `DomainPack`, `Adapter`, `TestAdapter`,
-  `TestDomainPack`, `LiveValueRegistry` (v3a §116–§120).
+  `TestDomainPack`, `LiveValueRegistry` (v3a §116–§120) +
+  optional `verbs()` / `vocabulary()` on `DomainPack` and the
+  `parse_pack_verb_signature` JSON helper (v4a §137 — backward-
+  compatible: packs without these methods/fields keep working).
 - `cli.py` — `Session` (owns symtab + handler table + registry +
-  packs), `run_file` (with v3a §110 block buffering and Phase 2
-  entry), `--pack` flag for JSON pack loading.
+  packs; resets active pack vocabulary on construction per v4a §137),
+  `run_file` (with v3a §110 block buffering and Phase 2 entry),
+  `--pack` flag for JSON pack loading (parses optional `vocabulary`
+  and `verbs` fields).
 - `packs/timer.py` — `TimerAdapter` + `TimerDomainPack` + `make_timer_pack(config)`
   (v3a §116 — first real domain pack; threaded periodic event source).
 - `result.py` — `InscriptResult` with nine statuses + metadata.

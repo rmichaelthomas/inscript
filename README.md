@@ -5,7 +5,7 @@ A prose-as-syntax programming language designed from the human end.
 > *"Every programming language in history was designed by programmers. This one wasn't. That's why the design is different."*
 > — Inscript Inception Checkpoint v1
 
-**Status (May 12, 2026):** v1 interpreter + v2a (`keep`, `of`, multi-field `each show`, descriptor preservation) + UX polish (`--quiet`, named-offender errors, auto-show truncation) + v2.1-patches + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings) + v2d (composition parameters with `from`, `choose` verb with `if`/`otherwise`) + **v3a event-driven execution** (`when`/`unless`/`finish`, two-phase listener model with indented action blocks, single-threaded event queue, cascading triggers with cycle detection, domain-pack adapter contract). **641 tests passing.** The sequential feature set (v1 → v2d) and the reactive feature set (v3a) together form a structurally complete programming language.
+**Status (May 13, 2026):** v1 interpreter + v2a (`keep`, `of`, multi-field `each show`, descriptor preservation) + UX polish (`--quiet`, named-offender errors, auto-show truncation) + v2.1-patches + v2b (composition return values, generalized `of`) + v2c (quoting mechanism for multi-word strings) + v2d (composition parameters with `from`, `choose` verb with `if`/`otherwise`) + v3a event-driven execution (`when`/`unless`/`finish`, two-phase listener model, single-threaded event queue, cascading triggers with cycle detection, domain-pack adapter contract) + v3b (quoted-string case preservation) + **v4a pack verb contract** (general-purpose JSON-defined pack verbs with slot signatures, type constraints, and execution dispatch; UI domain pack with 10 nouns + `navigate to <screen-name>`). **713 tests passing.** The sequential feature set (v1 → v2d), the reactive feature set (v3a/v3b), and the pack-verb extension contract (v4a) together form a structurally complete programming language; pack verbs let domains add vocabulary without touching the base 34 reserved words.
 
 ---
 
@@ -158,6 +158,13 @@ Pack JSON shape:
 
 Multiple `--pack` flags accumulate. v3a §118 — domain pack activation via Inscript syntax (a `use`/`load` verb) is intentionally deferred; pack registration is external.
 
+v4a §137 extends the pack JSON with optional `vocabulary` (noun additions to the reserved list while the pack is loaded) and `verbs` (slot signatures + execution dispatch). The shipped UI pack at `examples/pack_ui.json` adds 10 component nouns and the `navigate to <screen-name>` verb:
+
+```bash
+python -m inscript --pack examples/pack_ui.json --quiet \
+    examples/dogfood_navigate_test.insc
+```
+
 Flags work in any argument position and can be combined. Blank source lines are mirrored to the output under `--quiet` so paragraph breaks survive.
 
 Every statement is echoed first in canonical prose form (the parser's interpretation of what you wrote) before any output is shown — unless `--quiet` is set. This is the "Logic Preview" — see v1a §33.
@@ -166,7 +173,7 @@ Every statement is echoed first in canonical prose form (the parser's interpreta
 
 ## The vocabulary
 
-The current vocabulary is 34 reserved words across five categories. The complete list is the entire language surface — no other words are part of Inscript, only user-provided names and literal values.
+The current base vocabulary is 34 reserved words across five categories. The complete list is the entire language surface — no other words are part of Inscript, only user-provided names and literal values. Domain packs may add their own verbs and nouns at runtime via the v4a §137 pack verb contract; pack-contributed words are reserved only while the pack is loaded, and the base 34 are permanent.
 
 ### Verbs (10)
 
@@ -471,9 +478,9 @@ Line 3 then shows `4, 5` — the filter's commit persists. Multi-operation seque
 
 ## Current scope and deferrals
 
-The shipped build covers v1 (48 locked test sentences) + v2a (11 more) + UX polish + v2.1-patches + v2b (9 more) + v2c (12 more) + v2d (15 more) + v3a (18 more). **641 tests passing.** Larger scope is intentionally deferred — but the sequential feature set (v1 → v2d) and the reactive feature set (v3a) together form a structurally complete programming language.
+The shipped build covers v1 (48 locked test sentences) + v2a (11 more) + UX polish + v2.1-patches + v2b (9 more) + v2c (12 more) + v2d (15 more) + v3a (18 more) + v3b (4 more) + v4a (10 more). **713 tests passing.** Larger scope is intentionally deferred — but the sequential feature set (v1 → v2d), the reactive feature set (v3a/v3b), and the pack-verb extension contract (v4a) together form a structurally complete programming language.
 
-**Currently shipped.** Two-phase execution (Phase 1 sequential, Phase 2 reactive). 10 verbs. 14 connectives. 34 reserved words. Numbers (integers + decimals). Strings (single-token bare words + multi-word quoted strings via v2c). Lists (homogeneous — all numbers, all strings, or all records). Records (named fields). Named compositions with optional parameters (v2d §96). Conditional branching via `choose if/otherwise` (v2d §99). In-place `filter`, non-destructive `keep`, non-destructive `combine`, copy semantics, iterator context for `each`, multi-field display in `each ... show`, single-record field access via `show <field> of <record>` and `<field> of <record>` in any value position. Descriptor preservation, named-offender error wording, stepwise sequences. Composition return values via `remember the X from <comp>` (v2b §76). Event-driven `when`/`unless`/`finish` with indented action blocks (v3a §110), single-threaded event queue (v3a §119), edge-triggered evaluation with deep value equality (v3a §113), depth-first cascading with conservative cycle detection (v3a §114), domain-pack adapter contract (v3a §116) registered externally via `--pack <path>` JSON or `Session(domain_packs=...)`. CLI flags `--quiet`, `--test`, `--pack` (any position).
+**Currently shipped.** Two-phase execution (Phase 1 sequential, Phase 2 reactive). 10 base verbs. 14 connectives. 34 base reserved words. Numbers (integers + decimals). Strings (single-token bare words + multi-word quoted strings via v2c, with verbatim case preservation per v3b §127). Lists (homogeneous — all numbers, all strings, or all records). Records (named fields, with descriptor preserved on the symbol for pack-verb type checks). Named compositions with optional parameters (v2d §96). Conditional branching via `choose if/otherwise` (v2d §99). In-place `filter`, non-destructive `keep`, non-destructive `combine`, copy semantics, iterator context for `each`, multi-field display in `each ... show`, single-record field access via `show <field> of <record>` and `<field> of <record>` in any value position. Descriptor preservation, named-offender error wording, stepwise sequences. Composition return values via `remember the X from <comp>` (v2b §76). Event-driven `when`/`unless`/`finish` with indented action blocks (v3a §110), single-threaded event queue (v3a §119), edge-triggered evaluation with deep value equality (v3a §113), depth-first cascading with conservative cycle detection (v3a §114), domain-pack adapter contract (v3a §116) registered externally via `--pack <path>` JSON or `Session(domain_packs=...)`. v4a general-purpose pack verb contract (§137) — packs declare verbs with slot signatures + type constraints + execution dispatch in JSON; the parser dispatches pack verbs after base verbs, the analyzer enforces descriptor-based type constraints, and `set_value` is the first execution type. The UI domain pack (§134) ships 10 component nouns and the `navigate to <screen-name>` verb. CLI flags `--quiet`, `--test`, `--pack` (any position).
 
 **Not built (deliberately).** Tile-composition interface. Proposal engine and authorize-don't-author authoring flow. Real-world domain packs (healthcare, smart home, game) — the language ships a test adapter only, packs are product work. Domain pack activation syntax (an Inscript-level `use`/`load` verb). The verbs `transform`, `compare` — reserved-word slots protected, no grammar yet. Symbolic syntax surface. External data sources beyond domain-pack adapters. Negative numbers. Scope isolation beyond the iterator context and composition parameters. Mixed-type lists. Descending ranges. Ranges over 10,000 items. Nested records (and therefore chained `of`). `choose` inside `each`. Sophisticated cycle detection beyond same-handler-twice. Adapter timeout or preemption. Tile interface, proposal engine, domain packs as product surfaces.
 
@@ -520,6 +527,8 @@ inscript/
 │   ├── inscript_addendum_v2c_multi_word_strings.md
 │   ├── inscript_addendum_v2d_parameters_and_branching.md
 │   ├── inscript_addendum_v3a_event_driven_execution.md
+│   ├── inscript_addendum_v3b_quoted_string_case_preservation.md
+│   ├── inscript_addendum_v4a_pack_verbs_and_port.md
 │   └── inscript_v1_thirty_sentences.md
 ├── src/inscript/
 │   ├── vocabulary.py                Token types, reserved-word sets, verb signatures
@@ -547,16 +556,19 @@ inscript/
 │   ├── test_listener.py             Phase 2 listener (initial eval, cascades, cycle, shutdown)
 │   ├── test_integration.py          End-to-end coverage for v1 / v2a / v2b / v2c / v2d sentences
 │   ├── test_integration_v3a.py      End-to-end for v3a sentences 96–113
-│   └── conftest.py
+│   ├── test_integration_v4a.py      End-to-end for v4a sentences 118–127 (UI pack + navigate)
+│   └── conftest.py                  Autouse fixture: resets pack vocabulary between tests (v4a §137)
 └── examples/
     ├── program1_basics.insc
     ├── program2_orders.insc
     ├── dogfood_*.insc               Per-addendum dogfood programs + .actual.txt baselines
     ├── dogfood_v3a_event_driven.insc
-    └── dogfood_v3a_pack.json        Test domain pack for the v3a dogfood
+    ├── dogfood_v3a_pack.json        Test domain pack for the v3a dogfood
+    ├── dogfood_navigate_test.insc   v4a smoke test for `navigate to <screen>`
+    └── pack_ui.json                 v4a UI domain pack: 10 nouns + `navigate` verb
 ```
 
-641 tests pass via `pytest tests/`. Each spec section that locks a behavior has at least one test that exercises it.
+713 tests pass via `pytest tests/`. Each spec section that locks a behavior has at least one test that exercises it.
 
 ---
 
@@ -580,8 +592,10 @@ Sentence numbering accumulates across addenda:
 | v2c §94 | 69–80 | Quoting mechanism: multi-word values, quoted reserved words, conditional rendering, name/field rejection |
 | v2d §105 | 81–95 | Composition parameters with `from`, parameterized calls in value-capture position, `choose if`/`otherwise`, multi-statement branches |
 | v3a §125 | 96–113 | `when` + `unless` + `finish`, initial evaluation, cascades, cycle detection, unset live values, no-adapter shutdown, Phase 1 error blocks Phase 2 |
+| v3b §131 | 114–117 | Quoted-string case preservation across lex, render, and `where` equality |
+| v4a §140 | 118–127 | `navigate to <screen>` basic + semantic errors + parse error, UI components with known and freeform fields, `when` on UI components, `navigate` inside an action block, pack-verb reserved-word check, pack noun usable as name without pack |
 
-All 113 sentences are wired through the test suite. v1/v2a/v2b/v2c/v2d coverage lives in `tests/test_integration.py`; v3a in `tests/test_integration_v3a.py`. The full suite is 641 tests.
+All 127 sentences are wired through the test suite. v1/v2a/v2b/v2c/v2d coverage lives in `tests/test_integration.py`; v3a in `tests/test_integration_v3a.py`; v4a in `tests/test_integration_v4a.py`. The full suite is 713 tests.
 
 ---
 
@@ -617,7 +631,9 @@ The build specification has grown by addendum. Each document either locks new de
 | `inscript_addendum_v2c_multi_word_strings.md` | Locked + implemented | Quoting mechanism: lexer quote-state (§86), `QUOTED_STRING` in value positions only (§87), literal display via `show "..."` (§88), quoted reserved words bypass vocabulary exclusion (§89), conditional rendering (§90), case normalization inside quotes (§91), empty quotes rejected (§92), test sentences 69–80 (§94) |
 | `inscript_addendum_v2d_parameters_and_branching.md` | Locked + implemented | Composition parameters with `from` (§96), parameter-mismatch errors (§97), parameterized calls in value-capture position (§98), `choose if`/`otherwise` (§99–§102), `transform`/`compare` deferral (§103), vocabulary update (§104), test sentences 81–95 (§105) |
 | `inscript_addendum_v3a_event_driven_execution.md` | Locked + implemented | Two-phase execution (§107), `when` registration (§108), `unless` guard (§109), indented action blocks (§110), action block scope and live-value rules (§111), `finish` verb (§112), edge-triggered evaluation (§113), cascading + cycle detection (§114), registration-order firing (§115), adapter contract (§116), live-value lifecycle (§117), domain pack registration (§118), single-threaded event queue (§119), adapter failure isolation (§120), initial evaluation (§121), result interface (§122), amber at registration (§123), vocabulary update (§124), test sentences 96–113 (§125) |
-| `inscript_v1_thirty_sentences.md` | Test specification | 1–30 + v1c §53 (31–34) + v1d §65 (35–48) + v2a §74 (49–59) + v2b §83 (60–68) + v2c §94 (69–80) + v2d §105 (81–95) + v3a §125 (96–113) = 113 sentences |
+| `inscript_addendum_v3b_quoted_string_case_preservation.md` | Locked + implemented | Quoted-content case preservation (§127 — supersedes v2c §91), case-bearing as third conditional-quoting trigger (§128), migration impact (§129), vocabulary unchanged (§130), test sentences 114–117 (§131) |
+| `inscript_addendum_v4a_pack_verbs_and_port.md` | Locked + implemented (Python; TypeScript port lives in the Möbius monorepo) | UI domain pack vocabulary (§134), `navigate` as pack-level verb (§135), component schemas with freeform overflow (§136), general-purpose pack verb contract (§137), TypeScript port scope (§138), build phases (§139), test sentences 118–127 (§140) |
+| `inscript_v1_thirty_sentences.md` | Test specification | 1–30 + v1c §53 (31–34) + v1d §65 (35–48) + v2a §74 (49–59) + v2b §83 (60–68) + v2c §94 (69–80) + v2d §105 (81–95) + v3a §125 (96–113) + v3b §131 (114–117) + v4a §140 (118–127) = 127 sentences |
 
 Two triage documents and two gap inventories under `docs/` show how each addendum was scoped against dogfooding evidence:
 
@@ -654,7 +670,7 @@ The Möbius Inscript system is a DSL for behavioral rules within Möbius. The In
 |---|---|
 | Architect, language designer | Rob Thomas (R. Michael Thomas) |
 | Interpreter builder | Claude Code |
-| Build sessions | May 11–12, 2026 (v1 → v2a → UX polish → v2.1-patches → v2b → v2c → v2d → v3a) |
+| Build sessions | May 11–13, 2026 (v1 → v2a → UX polish → v2.1-patches → v2b → v2c → v2d → v3a → v3b → v4a Phase 1 Python → v4a Phase 2 TypeScript port in Möbius) |
 
 The build is a paired collaboration. The architect produces and approves every design decision in the locked specification documents. The builder translates those decisions into Python — and, when implementation surfaces an ambiguity, opens the spec document rather than guessing. The CLAUDE.md rule: every claim is load-bearing; do not state that a spec section says something without verifying. The rhythm — *spec → dogfood → triage → spec → implement* — is what keeps the language shape coherent across additions.
 
@@ -662,7 +678,7 @@ The build is a paired collaboration. The architect produces and approves every d
 
 ## Status and what's next
 
-**Currently shipped.** v1 → v2d (sequential) + v3a (event-driven listener mode). 641 tests passing. The interpreter runs in a terminal as text-only, reads `.insc` source files, and offers an interactive REPL with `--quiet`, `--test`, and `--pack` flags. The sequential and reactive feature sets together form a structurally complete programming language.
+**Currently shipped.** v1 → v2d (sequential) + v3a/v3b (event-driven listener mode + quoted-string case preservation) + v4a (pack verb contract + UI domain pack). 713 tests passing. The interpreter runs in a terminal as text-only, reads `.insc` source files, and offers an interactive REPL with `--quiet`, `--test`, and `--pack` flags. A separate TypeScript port (lexer/reorderer/parser/analyzer/renderer — no interpreter) lives in the Möbius monorepo at `packages/inscript-lang/` and validates the same 127 sentences against this implementation as its sync contract (v4a §138).
 
 **The largest remaining work is not language additions.** It's everything around the language — Branches C/D/E from the inception checkpoint, plus domain packs as product surfaces. Specifically:
 
