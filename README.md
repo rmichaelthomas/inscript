@@ -1,6 +1,11 @@
-# Inscript Programming Language
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/wordmark-primary-dark.svg">
+    <img src="brand/wordmark-primary-light.svg" alt="Inscript" width="420">
+  </picture>
+</p>
 
-A prose-as-syntax programming language designed from the human end.
+<p align="center"><em>A prose-as-syntax programming language designed from the human end.</em></p>
 
 **Status:** v4a shipped — sequential execution, reactive listener mode, and a general-purpose pack verb contract. **713 tests passing across 127 locked test sentences.**
 
